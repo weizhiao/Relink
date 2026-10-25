@@ -1,8 +1,8 @@
 //! ELF symbol hash table implementations
 //!
 //! This module provides implementations for different ELF symbol hash table formats,
-//! including the traditional SYSV hash table, the GNU hash table, and a custom hash
-//! implementation. These hash tables are used to efficiently locate symbols during
+//! including the traditional SYSV hash table and the GNU hash table.
+//! These hash tables are used to efficiently locate symbols during
 //! the dynamic linking process.
 //!
 //! The GNU hash table (.gnu.hash) is generally preferred over the traditional
@@ -55,14 +55,6 @@ pub fn sysv_hash(name: &[u8]) -> u32 {
         hash &= !high;
     }
     hash
-}
-
-pub trait SymbolHash<L: ElfLayout> {
-    fn lookup<'sym, H>(
-        &self,
-        table: SymbolTableView<'sym, L, H>,
-        lookup: &mut SymbolLookup<'_>,
-    ) -> Option<&'sym ElfSymbol<L>>;
 }
 
 /// Standard dynamic ELF symbol hash table.
@@ -152,9 +144,9 @@ impl<L: ElfLayout> HashTable<L> {
         }))
     }
 
-    pub(crate) fn for_each<H>(
+    pub(crate) fn for_each(
         &self,
-        table: SymbolTableView<'_, L, H>,
+        table: SymbolTableView<'_, L>,
         visitor: &mut dyn FnMut(&ElfSymbol<L>),
     ) {
         match &self.0 {
@@ -162,12 +154,10 @@ impl<L: ElfLayout> HashTable<L> {
             HashTableKind::Sysv(hashtab) => hashtab.for_each(table, visitor),
         }
     }
-}
 
-impl<L: ElfLayout> SymbolHash<L> for HashTable<L> {
-    fn lookup<'sym, H>(
+    pub(crate) fn lookup<'sym>(
         &self,
-        table: SymbolTableView<'sym, L, H>,
+        table: SymbolTableView<'sym, L>,
         lookup: &mut SymbolLookup<'_>,
     ) -> Option<&'sym ElfSymbol<L>> {
         match &self.0 {

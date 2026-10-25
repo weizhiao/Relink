@@ -135,10 +135,9 @@ impl RelocationObserver for CustomBinding {
         D: Send + Sync + 'static,
         R: RegionAccess,
         Tls: TlsResolver<NativeArch>,
-        H,
     >(
         &mut self,
-        event: &mut RelocationEvent<'_, D, NativeArch, R, Tls, H>,
+        event: &mut RelocationEvent<'_, D, NativeArch, R, Tls>,
     ) -> elf_loader::Result<HandleResult> {
         let Some(symbol) = event.relocation_symbol() else {
             return Ok(HandleResult::Unhandled);

@@ -1,9 +1,9 @@
 use crate::{
-    ParsePhdrError, Result,
+    Error, MmapError, ParsePhdrError, Result,
     elf::{ElfLayout, ElfPhdr, ElfProgramFlags, ElfProgramType},
-    input::{ElfReader, check_read_range},
+    input::{ElfReader, FileBacking, check_read_range},
     memory::{VmAddr, VmOffset, rounddown, roundup},
-    os::{Mmap, ProtFlags},
+    os::{Mmap, ProtFlags, SpaceInit, SpaceLayout},
     segment::{ElfSegment, ElfSegments, SegmentContent, populate_segments, protect_segments},
 };
 
@@ -48,44 +48,126 @@ where
         .iter()
         .filter(|phdr| phdr.program_type() == ElfProgramType::LOAD)
         .map(|phdr| phdr.create_segment(page_size));
-
+    let mut remaining = segments.clone();
     let use_file = file_backing.is_some();
-    let prot = if use_file {
-        ProtFlags::PROT_NONE
+    let loaded = if is_dylib
+        && let Some(backing) = file_backing
+        && let Some(loaded) = map_first_segment(phdrs, mapper, &layout, backing, page_size)?
+    {
+        // The initial file mapping already populated the first LOAD segment.
+        remaining.next();
+        loaded
     } else {
-        ProtFlags::PROT_WRITE
+        let (prot, init) = if use_file {
+            (ProtFlags::PROT_NONE, SpaceInit::Reserve)
+        } else {
+            (ProtFlags::PROT_WRITE, SpaceInit::Zeroed)
+        };
+        let region = unsafe { mapper.create_space(layout, prot, init) }?;
+        let min_vaddr = VmOffset::new(layout.offset);
+        let base = region.addr() - min_vaddr;
+        ElfSegments::new(region, base, min_vaddr)
     };
-    let region =
-        unsafe { mapper.create_space(layout.preferred_addr, layout.mapped_len, prot, use_file) }?;
-    let base = region.addr() - layout.min_vaddr;
-    let loaded = ElfSegments::new(region, base, layout.min_vaddr);
-    populate_segments(mapper, object, &loaded, segments.clone(), file_backing)?;
+    populate_segments(mapper, object, &loaded, remaining, file_backing)?;
     if !use_file {
         protect_segments(&loaded, segments)?;
     }
     Ok(loaded)
 }
 
-/// Memory layout requirements derived from LOAD program headers.
-pub(crate) struct ProgramSegmentLayout {
-    /// Preferred address passed to `mmap`; `None` lets the OS choose.
-    preferred_addr: Option<VmAddr>,
-    /// Total page-aligned memory range covered by LOAD segments.
-    pub(crate) mapped_len: usize,
-    /// Lowest page-aligned virtual address among LOAD segments.
-    pub(crate) min_vaddr: VmOffset,
+/// Creates the image's address space with a file mapping and completes its first
+/// LOAD segment. The caller populates the remaining segments through the common path.
+fn map_first_segment<M: Mmap + ?Sized>(
+    phdrs: &[ElfPhdr<impl ElfLayout>],
+    mapper: &M,
+    layout: &SpaceLayout,
+    backing: FileBacking,
+    page_size: usize,
+) -> Result<Option<ElfSegments<M::Region>>> {
+    let loads = phdrs
+        .iter()
+        .filter(|phdr| phdr.program_type() == ElfProgramType::LOAD);
+    let Some(first) = loads.clone().next() else {
+        return Ok(None);
+    };
+    if first.p_filesz() == 0 {
+        return Ok(None);
+    }
+    // The single middle-range protection below requires non-overlapping pages.
+    // Other layouts still use the common reservation and segment-mapping path.
+    let mut end = layout.offset;
+    let mut last_start = end;
+    let mut has_holes = false;
+    for phdr in loads.clone() {
+        let start = rounddown(phdr.p_vaddr().get(), page_size);
+        if start < end {
+            return Ok(None);
+        }
+        has_holes |= start > end;
+        last_start = start;
+        end = roundup(phdr.p_vaddr().get() + phdr.p_memsz(), page_size);
+    }
+
+    let initial_file_offset = rounddown(first.p_offset(), page_size);
+    let offset = backing
+        .offset
+        .checked_add(initial_file_offset)
+        .ok_or(crate::IoError::ReadBufferTooLarge)?;
+    let segment = first.create_segment(page_size);
+    // SAFETY: LOAD ranges were validated against the reader before this call.
+    // No bytes are accessed until their file offset and permissions are fixed;
+    // any full BSS pages are replaced with anonymous pages before publication.
+    let region = match unsafe {
+        mapper.create_space(
+            *layout,
+            segment.prot,
+            SpaceInit::File {
+                fd: backing.fd,
+                offset,
+            },
+        )
+    } {
+        Ok(region) => region,
+        Err(Error::Mmap(MmapError::FileMappingUnsupported)) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let min_vaddr = VmOffset::new(layout.offset);
+    let base = region.addr() - min_vaddr;
+    let loaded = ElfSegments::new(region, base, min_vaddr);
+    let SegmentContent::Contiguous {
+        file_size,
+        zero_size,
+        ..
+    } = &segment.content
+    else {
+        unreachable!("program segments have contiguous file contents");
+    };
+    if has_holes {
+        // Protect the whole middle range once. BSS population and later segment
+        // mappings restore their own pages, leaving only the gaps inaccessible.
+        let file_end = segment.offset.get() + roundup(*file_size, page_size);
+        loaded.mprotect(
+            base + VmOffset::new(file_end),
+            last_start - file_end,
+            ProtFlags::PROT_NONE,
+        )?;
+    }
+    segment.fill_zero(mapper, &loaded, *file_size, *zero_size)?;
+    Ok(Some(loaded))
 }
 
-/// Parse segments to determine memory layout requirements
+/// Parses LOAD memory layout requirements, retaining the lowest page-aligned
+/// virtual address in `offset`.
 #[inline]
 pub(crate) fn parse_segments(
     phdrs: &[ElfPhdr<impl ElfLayout>],
     is_dylib: bool,
     page_size: usize,
-) -> Result<ProgramSegmentLayout> {
+) -> Result<SpaceLayout> {
     let mut min_vaddr = usize::MAX;
     let mut max_vaddr = 0;
     let mut has_load_segment = false;
+    let mut alignment = page_size;
 
     // Find the minimum and maximum virtual addresses of LOAD segments
     for phdr in phdrs {
@@ -96,6 +178,7 @@ pub(crate) fn parse_segments(
             }
 
             has_load_segment = true;
+            alignment = alignment.max(phdr.p_align());
             if phdr.p_filesz() > phdr.p_memsz() {
                 return Err(ParsePhdrError::malformed("PT_LOAD p_filesz exceeds p_memsz").into());
             }
@@ -119,26 +202,31 @@ pub(crate) fn parse_segments(
     if !has_load_segment {
         return Err(ParsePhdrError::malformed("program headers do not contain PT_LOAD").into());
     }
+    if !alignment.is_power_of_two() {
+        return Err(ParsePhdrError::malformed("PT_LOAD alignment is not a power of two").into());
+    }
 
     // Align addresses to page boundaries
     max_vaddr = roundup(max_vaddr, page_size);
     min_vaddr = rounddown(min_vaddr, page_size);
     let total_size = max_vaddr
         .checked_sub(min_vaddr)
+        .filter(|size| *size != 0)
         .ok_or(ParsePhdrError::malformed(
-            "PT_LOAD virtual address range is inverted",
+            "PT_LOAD virtual address range is empty or inverted",
         ))?;
 
     // For shared libraries, let the OS choose the base address (None)
     // For executables, suggest the preferred base address (Some)
-    Ok(ProgramSegmentLayout {
-        preferred_addr: if is_dylib {
+    Ok(SpaceLayout {
+        addr: if is_dylib {
             None
         } else {
             Some(VmAddr::new(min_vaddr))
         },
-        mapped_len: total_size,
-        min_vaddr: VmOffset::new(min_vaddr),
+        len: total_size,
+        align: alignment,
+        offset: min_vaddr,
     })
 }
 

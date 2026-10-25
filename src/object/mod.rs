@@ -1,8 +1,6 @@
 //! Relocatable-object loading, layout, and export helpers.
 
 mod builder;
-mod exports;
-mod hash;
 pub(crate) mod layout;
 mod link;
 mod load;
@@ -11,8 +9,6 @@ mod sections;
 mod symbol;
 
 pub(crate) use builder::ObjectBuilder;
-pub(crate) use exports::{ObjectExports, ObjectExportsCell};
-pub use hash::CustomHash;
 pub use layout::SectionLifetime;
 pub use layout::{ObjectSegmentView, SectionGroups};
 pub(crate) use layout::{PltGotSection, SectionSegments};

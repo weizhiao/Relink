@@ -5,8 +5,7 @@
 //! contain code and data that need to be relocated before they can be executed.
 
 use crate::object::{
-    ObjectBuilder, ObjectExportsCell, ObjectSections, ObjectSymbolTable, PltGotSection,
-    SectionSegments,
+    ObjectBuilder, ObjectSections, ObjectSymbolTable, PltGotSection, SectionSegments,
 };
 use crate::segment::ElfSegments;
 use crate::{
@@ -14,18 +13,17 @@ use crate::{
     arch::NativeArch,
     elf::{ElfSectionId, Lifecycle},
     image::{
-        CoreRuntime, ElfCore, ElfModule, LoadedCore, ModuleHandle, ModuleSearch, ModuleState,
-        SymbolExports,
+        CoreRuntime, ElfCore, ElfModule, ExportTable, LoadedCore, ModuleHandle, ModuleSearch,
+        ModuleState,
     },
     lazy::LazyBinder,
     memory::{HostRegion, RegionAccess},
     observer::RelocationObserver,
     relocation::{ObjectArch, Relocatable, RelocateArgs, RelocationArch},
     runtime::Domain,
-    sync::{Arc, OnceCell, arc_unsize},
+    sync::{Arc, OnceCell},
     tls::{ImageTlsState, TlsResolver},
 };
-use alloc::boxed::Box;
 use core::{fmt::Debug, ops::Deref};
 
 /// A relocatable ELF object.
@@ -44,9 +42,6 @@ pub struct RawObject<
 
     /// Relocation-only object symbol table.
     pub(crate) symtab: ObjectSymbolTable<Arch::Layout>,
-
-    /// Runtime exports installed after object symbols have been simplified.
-    pub(crate) exports: Arc<ObjectExportsCell<Arch::Layout>>,
 
     /// Rebased section headers paired with their section-name string table.
     pub(crate) sections: ObjectSections<Arch::Layout>,
@@ -85,13 +80,12 @@ where
 {
     pub(crate) fn build_object(self) -> RawObject<D, Arch, R, Tls> {
         let (segments, init_segments) = self.segments.into_parts();
-        let exports = Arc::new(ObjectExportsCell::new());
         let inner = ElfModule {
-            runtime: Box::new(CoreRuntime::new::<D, R, Tls>(None)),
+            runtime: CoreRuntime::new::<D, R, Tls>(None),
             state: ModuleState::new(self.source_id, self.domain.id()),
             lifecycle: OnceCell::new(),
             search: ModuleSearch::from_dynamic(self.path, None, None, None),
-            exports: arc_unsize!(Arc::clone(&exports) => dyn SymbolExports<Arch::Layout>),
+            exports: ExportTable::pending_object(),
             user_data: self.user_data,
             dynamic_info: None,
             lazy_lookup: OnceCell::new(),
@@ -105,7 +99,6 @@ where
         RawObject {
             core: ElfCore { inner },
             symtab: self.symtab,
-            exports,
             sections: self.sections,
             pltgot: self.pltgot,
             section_segments: self.section_segments,

@@ -1,10 +1,10 @@
 use crate::{
-    Result,
+    MmapError, Result,
     memory::{HostRegion, MappedRegion, VmAddr},
-    os::{MadviseAdvice, MapFlags, Mmap, ProtFlags},
+    os::{MadviseAdvice, MapFlags, Mmap, ProtFlags, SpaceInit, SpaceLayout},
 };
-use alloc::alloc::{alloc_zeroed, dealloc, handle_alloc_error};
-use core::{alloc::Layout, slice::from_raw_parts_mut};
+use alloc::alloc::{alloc_zeroed, handle_alloc_error};
+use core::{alloc::Layout, ptr::NonNull, slice::from_raw_parts_mut};
 
 /// Allocator-backed mapping for host-addressable memory.
 ///
@@ -12,8 +12,11 @@ use core::{alloc::Layout, slice::from_raw_parts_mut};
 /// the image VM address. It is the default mapper on bare-metal targets, but it
 /// can also be selected explicitly on other platforms.
 /// A non-null address passed to `create_space` selects caller-owned storage;
-/// that storage is cleared when `populate_later` is false. Use `alias_space`
+/// that storage is cleared for [`SpaceInit::Zeroed`]. Use `alias_space`
 /// to preserve the contents of an existing image.
+/// Allocated regions retain their original allocation layout and release the
+/// memory on drop. Direct [`Mmap::munmap`] is unsupported because an address and
+/// length alone do not identify that layout.
 #[derive(Clone, Copy, Default)]
 pub struct AllocMmap;
 
@@ -30,33 +33,43 @@ impl Mmap for AllocMmap {
 
     unsafe fn create_space(
         &self,
-        addr: Option<VmAddr>,
-        len: usize,
+        layout: SpaceLayout,
         _prot: ProtFlags,
-        populate_later: bool,
+        init: SpaceInit,
     ) -> Result<MappedRegion<Self::Region>> {
-        if let Some(addr) = addr.filter(|addr| *addr != VmAddr::null()) {
-            if !populate_later {
-                unsafe { core::ptr::write_bytes(addr.as_mut_ptr::<u8>(), 0, len) };
+        if matches!(init, SpaceInit::File { .. }) {
+            return Err(crate::MmapError::FileMappingUnsupported.into());
+        }
+        if let Some(addr) = layout.addr.filter(|addr| *addr != VmAddr::null()) {
+            if !layout.is_aligned(addr) || addr.get().checked_add(layout.len).is_none() {
+                return Err(MmapError::InvalidMappedRegionRange.into());
+            }
+            if matches!(init, SpaceInit::Zeroed) {
+                unsafe { core::ptr::write_bytes(addr.as_mut_ptr::<u8>(), 0, layout.len) };
             }
             // SAFETY: create_space's caller provides valid caller-owned storage.
             return Ok(unsafe {
-                MappedRegion::local_alias(addr.as_mut_ptr::<u8>().cast(), len, *self)
+                MappedRegion::local_alias_no_unmap(addr.as_mut_ptr::<u8>().cast(), layout.len)
             });
         }
 
-        let layout = unsafe { Layout::from_size_align_unchecked(len, self.page_size().bytes()) };
-        let memory = unsafe { alloc_zeroed(layout) };
-        if memory.is_null() {
-            handle_alloc_error(layout);
-        }
-        // SAFETY: this allocation is owned here and munmap uses the same layout.
-        Ok(unsafe { MappedRegion::local(memory.cast(), len, *self) })
+        let prefix = layout.offset % layout.align;
+        let allocation_len = layout
+            .len
+            .checked_add(prefix)
+            .ok_or(MmapError::InvalidMappedRegionRange)?;
+        let allocation = Layout::from_size_align(allocation_len, layout.align)
+            .map_err(|_| MmapError::InvalidMappedRegionRange)?;
+        let memory = NonNull::new(unsafe { alloc_zeroed(allocation) })
+            .unwrap_or_else(|| handle_alloc_error(allocation));
+        // The allocation is aligned already; only the requested address offset
+        // separates its start from the visible image range.
+        Ok(unsafe { MappedRegion::local_allocated(memory, allocation, prefix, layout.len) })
     }
 
     unsafe fn alias_space(&self, addr: VmAddr, len: usize) -> Result<MappedRegion<Self::Region>> {
         // SAFETY: the caller guarantees the existing storage remains valid.
-        Ok(unsafe { MappedRegion::local_alias(addr.as_mut_ptr::<u8>().cast(), len, *self) })
+        Ok(unsafe { MappedRegion::local_alias_no_unmap(addr.as_mut_ptr::<u8>().cast(), len) })
     }
 
     unsafe fn map_file_at(
@@ -82,14 +95,9 @@ impl Mmap for AllocMmap {
         Ok(())
     }
 
-    unsafe fn munmap(&self, addr: VmAddr, len: usize) -> Result<()> {
-        unsafe {
-            dealloc(
-                addr.as_mut_ptr(),
-                Layout::from_size_align_unchecked(len, self.page_size().bytes()),
-            )
-        };
-        Ok(())
+    unsafe fn munmap(&self, _addr: VmAddr, _len: usize) -> Result<()> {
+        // The region owns the Layout needed for deallocation.
+        Err(MmapError::InvalidMappedRegionRange.into())
     }
 
     unsafe fn madvise(&self, _addr: VmAddr, _len: usize, _behavior: MadviseAdvice) -> Result<()> {
@@ -111,10 +119,14 @@ mod tests {
         let region = unsafe {
             mapper
                 .create_space(
-                    Some(VmAddr::null()),
-                    mapper.page_size().bytes(),
+                    SpaceLayout {
+                        addr: Some(VmAddr::null()),
+                        len: mapper.page_size().bytes(),
+                        align: mapper.page_size().bytes(),
+                        offset: 0,
+                    },
                     ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
-                    false,
+                    SpaceInit::Zeroed,
                 )
                 .unwrap()
         };

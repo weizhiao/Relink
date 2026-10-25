@@ -121,9 +121,9 @@ impl ElfHash {
 }
 
 impl ElfHash {
-    pub(crate) fn for_each<L: ElfLayout, H>(
+    pub(crate) fn for_each<L: ElfLayout>(
         &self,
-        table: SymbolTableView<'_, L, H>,
+        table: SymbolTableView<'_, L>,
         visitor: &mut dyn FnMut(&ElfSymbol<L>),
     ) {
         for index in 0..self.header.nchain as usize {
@@ -147,9 +147,9 @@ impl ElfHash {
     /// # Returns
     /// * `Some(symbol)` - A reference to the found symbol
     /// * `None` - If the symbol was not found
-    pub(crate) fn lookup<'sym, L: ElfLayout, H>(
+    pub(crate) fn lookup<'sym, L: ElfLayout>(
         &self,
-        table: SymbolTableView<'sym, L, H>,
+        table: SymbolTableView<'sym, L>,
         lookup: &mut SymbolLookup<'_>,
     ) -> Option<&'sym ElfSymbol<L>> {
         // Get or compute the hash value for the symbol

@@ -10,7 +10,7 @@ fn applies_final_protection() {
         observer::{
             LoadObserver, SectionGroup, SectionGroups, SectionLayoutEvent, SectionLifetime,
         },
-        os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags},
+        os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags, SpaceInit, SpaceLayout},
     };
     use std::{
         alloc::{Layout, alloc_zeroed, dealloc},
@@ -30,6 +30,7 @@ fn applies_final_protection() {
     }
 
     struct RecordingRegion {
+        allocation: usize,
         ptr: usize,
         len: usize,
         layout: Layout,
@@ -37,13 +38,17 @@ fn applies_final_protection() {
     }
 
     impl RecordingRegion {
-        fn new(len: usize, calls: Arc<Mutex<Vec<ProtectionCall>>>) -> Self {
-            let layout = Layout::from_size_align(len.max(1), 4096).unwrap();
-            let ptr = unsafe { alloc_zeroed(layout) };
-            assert!(!ptr.is_null(), "test allocation failed");
+        fn new(space: SpaceLayout, calls: Arc<Mutex<Vec<ProtectionCall>>>) -> Self {
+            let offset = space.offset % space.align;
+            let layout =
+                Layout::from_size_align(space.len.checked_add(offset).unwrap(), space.align)
+                    .unwrap();
+            let allocation = unsafe { alloc_zeroed(layout) };
+            assert!(!allocation.is_null(), "test allocation failed");
             Self {
-                ptr: ptr as usize,
-                len,
+                allocation: allocation as usize,
+                ptr: unsafe { allocation.add(offset) } as usize,
+                len: space.len,
                 layout,
                 calls,
             }
@@ -53,7 +58,7 @@ fn applies_final_protection() {
     impl Drop for RecordingRegion {
         fn drop(&mut self) {
             unsafe {
-                dealloc(self.ptr as *mut u8, self.layout);
+                dealloc(self.allocation as *mut u8, self.layout);
             }
         }
     }
@@ -134,13 +139,15 @@ fn applies_final_protection() {
 
         unsafe fn create_space(
             &self,
-            _addr: Option<VmAddr>,
-            len: usize,
+            layout: SpaceLayout,
             _prot: ProtFlags,
-            _populate_later: bool,
+            init: SpaceInit,
         ) -> Result<MappedRegion<Self::Region>> {
+            if matches!(init, SpaceInit::File { .. }) {
+                return Err(elf_loader::error::MmapError::FileMappingUnsupported.into());
+            }
             Ok(MappedRegion::new(RecordingRegion::new(
-                len,
+                layout,
                 Arc::clone(&self.calls),
             )))
         }
@@ -152,10 +159,14 @@ fn applies_final_protection() {
         ) -> Result<MappedRegion<Self::Region>> {
             unsafe {
                 self.create_space(
-                    None,
-                    len,
+                    SpaceLayout {
+                        addr: None,
+                        len,
+                        align: self.page_size().bytes(),
+                        offset: 0,
+                    },
                     ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
-                    false,
+                    SpaceInit::Zeroed,
                 )
             }
         }

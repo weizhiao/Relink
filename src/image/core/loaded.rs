@@ -5,7 +5,7 @@ use crate::{
     arch::NativeArch,
     elf::{ElfDyn, ElfPhdr, ElfProgramType, ElfSymbol},
     image::{
-        GlobalScope, LocalScope, Module, ModuleHandle, ModuleSearch, ModuleState, SymbolExports,
+        ExportTable, GlobalScope, LocalScope, Module, ModuleHandle, ModuleSearch, ModuleState,
         SymbolLookup, module::lookup_symbol,
     },
     input::{ModulePath, ModuleSourceId},
@@ -386,7 +386,7 @@ where
     }
 
     #[inline]
-    fn exports(&self) -> &dyn SymbolExports<Arch::Layout> {
+    fn exports(&self) -> &ExportTable<Arch::Layout> {
         self.core.exports()
     }
 

@@ -1,5 +1,4 @@
 use crate::arch::NativeArch;
-use crate::elf::ElfRelType;
 #[cfg(feature = "version")]
 use crate::elf::version::ELFVersion;
 use crate::{
@@ -12,20 +11,20 @@ use crate::{
     lazy::{LazyBinder, SupportLazy},
     loader::ImageBuilder,
     logging,
-    memory::{HostRegion, ImageMemoryExt, MappedView, RegionAccess, VmAddr, VmOffset},
+    memory::{HostRegion, ImageMemoryExt, RegionAccess, VmAddr, VmOffset},
     observer::RelocationObserver,
     relocation::{DynamicRelocation, Relocatable, RelocateArgs, RelocationArch},
     runtime::Domain,
     segment::{ElfSegments, MemoryProtection},
-    sync::{Arc, OnceCell, arc_unsize},
+    sync::{Arc, OnceCell},
     tls::{ImageTlsState, TlsRequest, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{ops::Deref, ptr::NonNull};
 
 use crate::image::{
-    CoreRuntime, ElfCore, ElfModule, LoadedCore, ModuleSearch, ModuleState, SearchPathPool,
-    SymbolExports,
+    CoreRuntime, ElfCore, ElfModule, ExportTable, LoadedCore, ModuleSearch, ModuleState,
+    SearchPathPool,
 };
 
 impl<L: ElfLayout> SymbolTable<L> {
@@ -90,25 +89,6 @@ impl<L: ElfLayout> SymbolTable<L> {
     }
 }
 
-pub(crate) struct PltRelocInfo<Arch: RelocationArch = NativeArch> {
-    pub(crate) relocs: MappedView<ElfRelType<Arch>>,
-    pub(crate) symbols: Arc<SymbolTable<Arch::Layout>>,
-}
-
-impl<Arch: RelocationArch> PltRelocInfo<Arch> {
-    #[inline]
-    pub(crate) fn new(
-        pltrel: Option<MappedView<ElfRelType<Arch>>>,
-        symtab: Arc<SymbolTable<Arch::Layout>>,
-    ) -> Option<Self> {
-        let relocs = pltrel.filter(|relocs| !relocs.is_empty())?;
-        Some(Self {
-            relocs,
-            symbols: symtab,
-        })
-    }
-}
-
 pub(crate) struct DynamicInfo<Arch: RelocationArch = NativeArch> {
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
     pub(crate) phdrs: ElfPhdrs<Arch::Layout>,
@@ -144,9 +124,6 @@ struct ElfExtraData<Arch: RelocationArch = NativeArch> {
 
     /// Finalization functions to resolve after relocation.
     fini: LifecycleSpec,
-
-    /// Shared dynamic symbol table retained through relocation.
-    symtab: Arc<SymbolTable<Arch::Layout>>,
 }
 
 impl<Arch: RelocationArch> core::fmt::Debug for ElfExtraData<Arch> {
@@ -311,11 +288,6 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         unsafe { ImageMemoryExt::write_value(self.module.segments(), dt_debug_addr, entry)? };
         Ok(true)
     }
-
-    #[inline]
-    pub(crate) fn symtab(&self) -> &SymbolTable<Arch::Layout> {
-        &self.extra.symtab
-    }
 }
 
 impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Deref
@@ -359,8 +331,7 @@ where
         )?;
 
         let static_tls = self.static_tls | dynamic.static_tls;
-        let symtab = Arc::new(SymbolTable::from_dynamic(&dynamic, &self.segments)?);
-        let exports = symtab.clone();
+        let symtab = SymbolTable::from_dynamic(&dynamic, &self.segments)?;
         let needed_libs: Vec<&'static [u8]> = dynamic
             .needed_libs
             .iter()
@@ -400,17 +371,16 @@ where
         } else {
             ImageTlsState::empty()
         };
-        let plt = PltRelocInfo::new(dynamic.pltrel.clone(), symtab.clone());
         let state = ModuleState::new(self.source_id, self.domain.id());
         if dynamic.nodelete {
             state.pin_self();
         }
         let inner = ElfModule {
-            runtime: Box::new(CoreRuntime::new::<D, R, Tls>(plt)),
+            runtime: CoreRuntime::new::<D, R, Tls>(dynamic.pltrel.clone()),
             state,
             lifecycle: OnceCell::new(),
             search,
-            exports: arc_unsize!(exports => dyn SymbolExports<Arch::Layout>),
+            exports: ExportTable::from_elf(symtab),
             user_data: self.user_data,
             dynamic_info: Some(Arc::new(DynamicInfo::<Arch> {
                 eh_frame_hdr: self.eh_frame_hdr,
@@ -438,7 +408,6 @@ where
                 relocation,
                 init: dynamic.init,
                 fini: dynamic.fini,
-                symtab,
             },
             module: ElfCore { inner },
         })

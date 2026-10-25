@@ -1,10 +1,11 @@
 use core::{
+    alloc::Layout,
     ffi::c_void,
     mem::{MaybeUninit, align_of, size_of},
     ptr::{self, NonNull},
 };
 
-use alloc::boxed::Box;
+use alloc::{alloc::dealloc, boxed::Box};
 
 use crate::{
     ByteRepr, Result,
@@ -13,35 +14,82 @@ use crate::{
 
 use super::{MappedRegion, RegionAccess, VmAddr};
 
+enum Owner {
+    Mapping { addr: VmAddr, len: usize },
+    Allocation { ptr: NonNull<u8>, layout: Layout },
+}
+
 /// Host-addressable mmap region.
 pub struct HostRegion {
     host_ptr: *mut c_void,
     len: usize,
     control: Option<Box<dyn Mmap<Region = HostRegion>>>,
-    unmap_on_drop: bool,
+    owner: Option<Owner>,
 }
 
 impl MappedRegion<HostRegion> {
-    /// Creates a host-backed mapped region that unmaps through `control` on drop.
+    /// Exposes a host-backed range and unmaps the original mapping on drop.
     ///
     /// # Safety
-    /// `host_ptr..host_ptr + len` must describe a valid, non-overflowing mapping
-    /// or address reservation owned by the caller. Ownership is transferred to
-    /// the returned region: no other owner may release it, and it must remain
-    /// valid until the last clone is dropped. `control` must support operations
-    /// on this range and correctly release it through `munmap(host_ptr, len)`.
-    /// Reserved pages must be populated with suitable permissions before access.
+    /// `allocation_ptr..allocation_ptr + allocation_len` must describe a valid,
+    /// non-overflowing mapping or reservation owned by the caller. Ownership is
+    /// transferred to the returned region: no other owner may release it, and
+    /// it must remain valid until the last clone is dropped. The visible range
+    /// `host_ptr..host_ptr + len` must lie within this mapping. `control` must
+    /// support operations on the visible range and correctly release the original
+    /// mapping through `munmap(allocation_ptr, allocation_len)`. Reserved pages
+    /// must be populated with suitable permissions before access.
     #[inline]
-    pub unsafe fn local<M>(host_ptr: *mut c_void, len: usize, control: M) -> Self
+    pub unsafe fn local<M>(
+        host_ptr: *mut c_void,
+        len: usize,
+        allocation_ptr: *mut c_void,
+        allocation_len: usize,
+        control: M,
+    ) -> Self
     where
         M: Mmap<Region = HostRegion>,
     {
-        Self::new(HostRegion::with_control(
+        debug_assert!(
+            (host_ptr as usize)
+                .checked_sub(allocation_ptr as usize)
+                .and_then(|offset| offset.checked_add(len))
+                .is_some_and(|end| end <= allocation_len)
+        );
+        Self::new(HostRegion {
             host_ptr,
             len,
-            Box::new(control),
-            true,
-        ))
+            control: Some(Box::new(control)),
+            owner: Some(Owner::Mapping {
+                addr: VmAddr::from_ptr(allocation_ptr),
+                len: allocation_len,
+            }),
+        })
+    }
+
+    /// Owns a global allocation with its original layout and exposes a subrange.
+    ///
+    /// # Safety
+    /// `ptr` must come from the global allocator using `layout`, and ownership
+    /// must be transferred here. `offset..offset + len` must lie inside it.
+    #[inline]
+    pub(crate) unsafe fn local_allocated(
+        ptr: NonNull<u8>,
+        layout: Layout,
+        offset: usize,
+        len: usize,
+    ) -> Self {
+        debug_assert!(
+            offset
+                .checked_add(len)
+                .is_some_and(|end| end <= layout.size())
+        );
+        Self::new(HostRegion {
+            host_ptr: unsafe { ptr.as_ptr().add(offset).cast() },
+            len,
+            control: None,
+            owner: Some(Owner::Allocation { ptr, layout }),
+        })
     }
 
     /// Creates a host-backed mapped region alias that does not unmap on drop.
@@ -57,12 +105,12 @@ impl MappedRegion<HostRegion> {
     where
         M: Mmap<Region = HostRegion>,
     {
-        Self::new(HostRegion::with_control(
+        Self::new(HostRegion {
             host_ptr,
             len,
-            Box::new(control),
-            false,
-        ))
+            control: Some(Box::new(control)),
+            owner: None,
+        })
     }
 
     /// Creates a host-backed alias without taking ownership of the mapping.
@@ -78,25 +126,8 @@ impl MappedRegion<HostRegion> {
             host_ptr,
             len,
             control: None,
-            unmap_on_drop: false,
+            owner: None,
         })
-    }
-}
-
-impl HostRegion {
-    #[inline]
-    fn with_control(
-        host_ptr: *mut c_void,
-        len: usize,
-        control: Box<dyn Mmap<Region = HostRegion>>,
-        unmap_on_drop: bool,
-    ) -> Self {
-        Self {
-            host_ptr,
-            len,
-            control: Some(control),
-            unmap_on_drop,
-        }
     }
 }
 
@@ -219,12 +250,16 @@ impl RegionAccess for HostRegion {
 
 impl Drop for HostRegion {
     fn drop(&mut self) {
-        if self.unmap_on_drop {
-            let control = self
-                .control
-                .as_ref()
-                .expect("owned region must have a mapping backend");
-            let _ = unsafe { control.munmap(VmAddr::from_ptr(self.host_ptr), self.len) };
+        match &self.owner {
+            Some(Owner::Mapping { addr, len }) => {
+                let control = self
+                    .control
+                    .as_ref()
+                    .expect("owned mapping must have a mapping backend");
+                let _ = unsafe { control.munmap(*addr, *len) };
+            }
+            Some(Owner::Allocation { ptr, layout }) => unsafe { dealloc(ptr.as_ptr(), *layout) },
+            None => {}
         }
     }
 }

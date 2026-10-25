@@ -1,12 +1,11 @@
 use crate::Result;
 use crate::elf::{ElfLayout, ElfShdr, ElfStringTable, ElfSymbol, SymbolTableView};
 use crate::memory::{ImageMemory, MappedView};
-use crate::object::{CustomHash, section_bytes, section_entries_mut};
+use crate::object::{section_bytes, section_entries_mut};
 use core::fmt::Debug;
 
 /// Relocation workspace for relocatable-object symbols.
 pub(crate) struct ObjectSymbolTable<L: ElfLayout> {
-    hashtab: CustomHash,
     symbols: &'static mut [ElfSymbol<L>],
     strtab: ElfStringTable,
 }
@@ -15,7 +14,6 @@ impl<L: ElfLayout> Debug for ObjectSymbolTable<L> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ObjectSymbolTable")
             .field("symbol_count", &self.symbols.len())
-            .field("hash_entries", &self.hashtab.count_syms())
             .finish()
     }
 }
@@ -34,19 +32,12 @@ impl<L: ElfLayout> ObjectSymbolTable<L> {
         let strtab_bytes = section_bytes(memory, strtab_shdr)?;
         let strtab = ElfStringTable::new(MappedView::from_slice(strtab_bytes));
         let symbols = section_entries_mut(memory, symtab)?;
-        let hashtab = CustomHash::from_symbols(&*symbols, &strtab);
-
-        Ok(Self {
-            hashtab,
-            symbols,
-            strtab,
-        })
+        Ok(Self { symbols, strtab })
     }
 
     #[inline]
-    pub(crate) fn view(&self) -> SymbolTableView<'_, L, CustomHash> {
+    pub(crate) fn view(&self) -> SymbolTableView<'_, L> {
         SymbolTableView {
-            hashtab: &self.hashtab,
             symbols: self.symbols,
             strtab: &self.strtab,
             #[cfg(feature = "version")]

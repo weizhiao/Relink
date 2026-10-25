@@ -328,7 +328,7 @@ impl<'a> SymbolVersion<'a> {
 }
 
 #[cfg(feature = "version")]
-impl<'symtab, L: ElfLayout, H> SymbolTableView<'symtab, L, H> {
+impl<'symtab, L: ElfLayout> SymbolTableView<'symtab, L> {
     pub(crate) fn get_requirement(&self, sym_idx: usize) -> Option<SymbolVersion<'symtab>> {
         let gnu_version = self.version?;
         let version_index = gnu_version.version_ids.get(sym_idx)?;
@@ -547,8 +547,7 @@ mod tests {
     fn matches_default_hidden_and_explicit_versions() {
         let fixture = version_fixture([0, 1, 2, abi::VER_NDX_HIDDEN | 3], false);
         let version = parse_fixture(&fixture).unwrap();
-        let table = SymbolTableView::<NativeElfLayout, ()> {
-            hashtab: &(),
+        let table = SymbolTableView::<NativeElfLayout> {
             symbols: &[],
             strtab: &fixture.strtab,
             version: Some(&version),
@@ -576,8 +575,7 @@ mod tests {
     #[test]
     fn unversioned_tables_only_satisfy_non_exact_requirements() {
         let fixture = version_fixture([0, 1, 2, 3], false);
-        let table = SymbolTableView::<NativeElfLayout, ()> {
-            hashtab: &(),
+        let table = SymbolTableView::<NativeElfLayout> {
             symbols: &[],
             strtab: &fixture.strtab,
             version: None,

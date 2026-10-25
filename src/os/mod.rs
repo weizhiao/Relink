@@ -8,7 +8,7 @@ pub use defs::{MadviseAdvice, MapFlags, PageSize, ProtFlags};
 pub use mmap::{AllocMmap, FixedMmap};
 pub use platform::DefaultMmap;
 pub(crate) use platform::*;
-pub use traits::Mmap;
+pub use traits::{Mmap, SpaceInit, SpaceLayout};
 
 mod defs;
 mod mmap;

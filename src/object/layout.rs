@@ -13,7 +13,7 @@ use crate::{
     input::{ElfReader, ElfReaderExt},
     memory::{ImageMemory, RegionAccess, VmAddr, VmOffset, roundup},
     observer::{LoadObserver, SectionLayoutEvent},
-    os::{Mmap, ProtFlags},
+    os::{Mmap, ProtFlags, SpaceInit, SpaceLayout},
     relocation::{ObjectArch, RelocationArch},
     segment::{
         CopyRegion, ElfSegment, ElfSegments, MemoryProtection, SegmentContent, populate_segments,
@@ -546,19 +546,23 @@ impl SectionSegmentSet {
     {
         let len = self.total_size;
         if len == 0 {
-            let region = unsafe {
-                mapper.create_space(None, 1, ProtFlags::PROT_READ | ProtFlags::PROT_WRITE, false)
-            }?;
-            let base = region.addr();
-            return Ok(ElfSegments::from_ranges(region, base, Vec::new()));
+            return Err(ParseShdrError::malformed("section mapping range is empty").into());
         }
-
+        let align = self
+            .segments
+            .iter()
+            .map(|entry| entry.segment.page_size)
+            .fold(mapper.page_size().bytes(), usize::max);
         let region = unsafe {
             mapper.create_space(
-                None,
-                len,
+                SpaceLayout {
+                    addr: None,
+                    len,
+                    align,
+                    offset: 0,
+                },
                 ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
-                false,
+                SpaceInit::Zeroed,
             )
         }?;
         let base = region.addr();
@@ -614,22 +618,16 @@ impl<Arch: ObjectArch> SectionSegments<Arch> {
         }
         let mut core = SectionSegmentSet::default();
         let mut init = SectionSegmentSet::default();
-        let mut core_offset = 0;
-        let mut init_offset = 0;
         for (_, unit) in &mut units {
-            let (offset, segment_set) = match unit.lifetime {
-                SectionLifetime::Core => (&mut core_offset, &mut core),
-                SectionLifetime::Init => (&mut init_offset, &mut init),
+            let segment_set = match unit.lifetime {
+                SectionLifetime::Core => &mut core,
+                SectionLifetime::Init => &mut init,
             };
-            if let Some(segment) = unit.create_segment(offset, page_size) {
-                let final_prot = unit.final_prot;
-                *offset = roundup(*offset, page_size);
-                segment_set.push(segment, final_prot);
+            if let Some(segment) = unit.create_segment(&mut segment_set.total_size, page_size) {
+                segment_set.push(segment, unit.final_prot);
             }
         }
         drop(units);
-        core.total_size = core_offset;
-        init.total_size = init_offset;
 
         let mut section_segments = Self {
             core,
@@ -937,10 +935,6 @@ impl<'shdr, L: ElfLayout> SectionUnit<'shdr, L> {
     }
 
     fn create_segment(&mut self, base_offset: &mut usize, page_size: usize) -> Option<ElfSegment> {
-        self.content_sections
-            .first()
-            .or(self.zero_sections.first())?;
-
         let segment_start = *base_offset;
 
         let mut current_offset = segment_start;

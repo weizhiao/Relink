@@ -4,7 +4,9 @@ use crate::{
     Result,
     elf::{ElfSymbol, ElfSymbolBind, SymbolEntry},
     hint::unlikely,
-    image::{LocalScope, Module, ModuleHandle, ModuleInstanceId, ModuleScope, SymbolLookup},
+    image::{
+        ExportTable, LocalScope, Module, ModuleHandle, ModuleInstanceId, ModuleScope, SymbolLookup,
+    },
     logging,
     memory::VmAddr,
     sync::{Arc, Weak},
@@ -152,13 +154,19 @@ impl<'lib, Arch: RelocationArch> SymDef<'lib, Arch> {
     }
 }
 
+/// Resolves symbols through a fixed, ordered set of borrowed module exports.
 pub(crate) struct SymbolResolver<'lib, Arch: RelocationArch> {
     source: &'lib ModuleHandle<Arch>,
-    scope: LocalScope<Arch>,
-    global: Option<&'lib ModuleScope<Arch>>,
+    scope: &'lib LocalScope<Arch>,
+    modules: Vec<LookupModule<'lib, Arch>>,
     registry: Option<&'lib SymbolRegistry<Arch>>,
     symbolic: bool,
-    order: LookupOrder,
+}
+
+struct LookupModule<'scope, Arch: RelocationArch> {
+    source: &'scope ModuleHandle<Arch>,
+    exports: &'scope ExportTable<Arch::Layout>,
+    is_source: bool,
 }
 
 impl<'lib, Arch> SymbolResolver<'lib, Arch>
@@ -168,55 +176,41 @@ where
     #[inline]
     pub(crate) fn new(
         source: &'lib ModuleHandle<Arch>,
-        scope: LocalScope<Arch>,
+        scope: &'lib LocalScope<Arch>,
         global: Option<&'lib ModuleScope<Arch>>,
         registry: Option<&'lib SymbolRegistry<Arch>>,
         symbolic: bool,
         order: LookupOrder,
     ) -> Self {
+        let (before, after) = match order {
+            LookupOrder::GlobalFirst => (global, None),
+            LookupOrder::LocalFirst => (None, global),
+        };
+        let mut modules = Vec::with_capacity(scope.len() + global.map_or(0, |scope| scope.len()));
+        modules.extend(
+            before
+                .into_iter()
+                .chain(scope.groups())
+                .chain(after)
+                .flat_map(|group| group.iter())
+                .map(|module| LookupModule {
+                    source: module,
+                    exports: module.exports(),
+                    is_source: core::ptr::eq(module.as_ref(), source.as_ref()),
+                }),
+        );
         Self {
             source,
             scope,
-            global,
+            modules,
             registry,
             symbolic,
-            order,
         }
     }
 
     #[inline]
     pub(crate) const fn scope(&self) -> &LocalScope<Arch> {
-        &self.scope
-    }
-
-    #[inline]
-    pub(crate) fn into_scope(self) -> LocalScope<Arch> {
         self.scope
-    }
-
-    fn lookup<'find>(
-        &'find self,
-        entry: &SymbolEntry<'find, Arch::Layout>,
-        lookup: &mut SymbolLookup<'_>,
-        source: &'find ModuleHandle<Arch>,
-    ) -> Option<&'find ElfSymbol<Arch::Layout>> {
-        // A definition hint is valid only when searching the exact source
-        // module. Other modules, including wrappers, must use ordinary lookup.
-        lookup.set_symbol_hint(
-            core::ptr::eq(source.as_ref(), self.source.as_ref())
-                .then_some(entry.symbol() as *const ElfSymbol<Arch::Layout> as usize),
-        );
-        let symbol = source
-            .exports()
-            .lookup(lookup)
-            .filter(|symbol| symbol.is_exported())?;
-        logging::trace!(
-            "binding file [{}] to [{}]: symbol [{}]",
-            self.source.name().escape_ascii(),
-            source.name().escape_ascii(),
-            entry.name().escape_ascii()
-        );
-        Some(symbol)
     }
 
     fn lookup_in_scope<'find>(
@@ -225,44 +219,31 @@ where
         mut accept: impl FnMut(&ModuleHandle<Arch>) -> bool,
     ) -> Option<(&'find ElfSymbol<Arch::Layout>, &'find ModuleHandle<Arch>)> {
         let mut lookup = SymbolLookup::from_info(entry.info().clone());
-        match self.order {
-            LookupOrder::GlobalFirst => self
-                .global
-                .iter()
-                .flat_map(|group| group.iter())
-                .chain(self.scope.iter())
-                .filter(|source| accept(source))
-                .find_map(|source| {
-                    self.lookup(entry, &mut lookup, source)
-                        .map(|symbol| (symbol, source))
-                }),
-            LookupOrder::LocalFirst => self
-                .scope
-                .iter()
-                .chain(self.global.iter().flat_map(|group| group.iter()))
-                .filter(|source| accept(source))
-                .find_map(|source| {
-                    self.lookup(entry, &mut lookup, source)
-                        .map(|symbol| (symbol, source))
-                }),
+        for module in &self.modules {
+            if !accept(module.source) {
+                continue;
+            }
+            // Definition hints apply only to the exact requesting module.
+            lookup.set_symbol_hint(
+                module
+                    .is_source
+                    .then_some(entry.symbol() as *const ElfSymbol<Arch::Layout> as usize),
+            );
+            if let Some(symbol) = module
+                .exports
+                .lookup(&mut lookup)
+                .filter(|symbol| symbol.is_exported())
+            {
+                logging::trace!(
+                    "binding file [{}] to [{}]: symbol [{}]",
+                    self.source.name().escape_ascii(),
+                    module.source.name().escape_ascii(),
+                    entry.name().escape_ascii()
+                );
+                return Some((symbol, module.source));
+            }
         }
-    }
-
-    fn find_def<'find>(
-        &'find self,
-        entry: &SymbolEntry<'find, Arch::Layout>,
-    ) -> Option<SymDef<'find, Arch>> {
-        let sym = entry.symbol();
-        if unlikely(sym.binds_local()) {
-            return (!sym.is_undef()).then(|| self.bind(entry.name(), sym, self.source));
-        }
-        if self.symbolic && !sym.is_undef() {
-            return Some(self.bind(entry.name(), sym, self.source));
-        }
-        if let Some((symbol, source)) = self.lookup_in_scope(entry, |_| true) {
-            return Some(self.bind(entry.name(), symbol, source));
-        }
-        (!sym.is_undef()).then(|| self.bind(entry.name(), sym, self.source))
+        None
     }
 
     fn bind<'find>(
@@ -296,12 +277,19 @@ where
         }
     }
 
+    #[inline(always)]
     pub(crate) fn find<'find>(
         &'find self,
         entry: &SymbolEntry<'find, Arch::Layout>,
     ) -> Option<SymDef<'find, Arch>> {
         let sym = entry.symbol();
-        self.find_def(entry).or_else(|| Self::weak_undef(sym))
+        let binds_locally = unlikely(sym.binds_local()) || (self.symbolic && !sym.is_undef());
+        if !binds_locally && let Some((symbol, source)) = self.lookup_in_scope(entry, |_| true) {
+            return Some(self.bind(entry.name(), symbol, source));
+        }
+        (!sym.is_undef())
+            .then(|| self.bind(entry.name(), sym, self.source))
+            .or_else(|| Self::weak_undef(sym))
     }
 
     #[cold]
@@ -405,8 +393,7 @@ mod tests {
             (LookupOrder::GlobalFirst, 0x200),
             (LookupOrder::LocalFirst, 0x100),
         ] {
-            let resolver =
-                SymbolResolver::new(&source, local.clone(), Some(&global), None, false, order);
+            let resolver = SymbolResolver::new(&source, &local, Some(&global), None, false, order);
             assert_eq!(
                 resolver.find(&symbol(&source)).unwrap().resolve().unwrap(),
                 VmAddr::new(expected)
@@ -430,7 +417,7 @@ mod tests {
         let external_scope = scope([external]);
         let resolver = SymbolResolver::new(
             &source,
-            external_scope,
+            &external_scope,
             None,
             None,
             false,
@@ -467,14 +454,8 @@ mod tests {
             [SyntheticSymbol::function(c"value", 0x300usize as *const ())],
         );
         let scope = scope([hidden, visible]);
-        let resolver = SymbolResolver::new(
-            &source,
-            scope.clone(),
-            None,
-            None,
-            false,
-            LookupOrder::GlobalFirst,
-        );
+        let resolver =
+            SymbolResolver::new(&source, &scope, None, None, false, LookupOrder::GlobalFirst);
         let def = resolver
             .find(&symbol(&source))
             .expect("lookup must continue past a hidden definition");
@@ -497,7 +478,7 @@ mod tests {
         assert!(
             SymbolResolver::new(
                 &hidden_ref,
-                scope,
+                &scope,
                 None,
                 None,
                 false,
@@ -543,9 +524,10 @@ mod tests {
         };
 
         let registry = SymbolRegistry::new();
+        let first_scope = scope([unique("first", 0x100)]);
         let first = SymbolResolver::new(
             &source,
-            scope([unique("first", 0x100)]),
+            &first_scope,
             None,
             Some(&registry),
             false,
@@ -558,9 +540,10 @@ mod tests {
             Some(definition.definition().unwrap().1.state().instance_id())
         );
 
+        let second_scope = scope([unique("second", 0x200)]);
         let second = SymbolResolver::new(
             &source,
-            scope([unique("second", 0x200)]),
+            &second_scope,
             None,
             Some(&registry),
             false,
@@ -572,9 +555,10 @@ mod tests {
         );
 
         let other_registry = SymbolRegistry::new();
+        let other_scope = scope([unique("other", 0x300)]);
         let other = SymbolResolver::new(
             &source,
-            scope([unique("other", 0x300)]),
+            &other_scope,
             None,
             Some(&other_registry),
             false,

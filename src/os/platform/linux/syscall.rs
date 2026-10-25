@@ -4,7 +4,7 @@ use crate::os::PageSize;
 use crate::{
     Error, IoError, MmapError, Result, logging,
     memory::{HostRegion, MappedRegion, VmAddr},
-    os::{MadviseAdvice, MapFlags, Mmap, ProtFlags},
+    os::{MadviseAdvice, MapFlags, Mmap, ProtFlags, SpaceInit, SpaceLayout},
 };
 use alloc::ffi::CString;
 use core::{
@@ -22,6 +22,23 @@ impl DefaultMmap {
     #[inline]
     pub const fn new() -> Self {
         Self
+    }
+
+    #[inline]
+    pub(super) unsafe fn map(
+        &self,
+        addr: VmAddr,
+        len: usize,
+        prot: ProtFlags,
+        flags: MapFlags,
+        fd: isize,
+        offset: usize,
+    ) -> core::result::Result<VmAddr, u32> {
+        from_ret(
+            unsafe { raw_mmap(addr, len, prot, flags, fd, offset) },
+            |code| code,
+        )
+        .map(VmAddr::new)
     }
 }
 
@@ -150,26 +167,11 @@ impl Mmap for DefaultMmap {
 
     unsafe fn create_space(
         &self,
-        addr: Option<VmAddr>,
-        len: usize,
+        layout: SpaceLayout,
         prot: ProtFlags,
-        _populate_later: bool,
+        init: SpaceInit,
     ) -> Result<MappedRegion<Self::Region>> {
-        let ptr = from_ret(
-            unsafe {
-                raw_mmap(
-                    addr.unwrap_or(VmAddr::null()),
-                    len,
-                    prot,
-                    MapFlags::MAP_PRIVATE | MapFlags::MAP_ANONYMOUS,
-                    -1,
-                    0,
-                )
-            },
-            |code| Error::from(MmapError::MmapAnonymousFailed { code }),
-        )? as *mut c_void;
-        // SAFETY: the successful allocation above transfers ownership of this range.
-        Ok(unsafe { MappedRegion::local(ptr, len, *self) })
+        unsafe { super::create_space(self, layout, prot, init) }
     }
 
     unsafe fn alias_space(&self, addr: VmAddr, len: usize) -> Result<MappedRegion<Self::Region>> {
@@ -186,11 +188,9 @@ impl Mmap for DefaultMmap {
         offset: usize,
         fd: isize,
     ) -> Result<()> {
-        from_ret(
-            unsafe { raw_mmap(addr, len, prot, flags, fd, offset) },
-            |code| Error::from(MmapError::MmapFailed { code }),
-        )?;
-        Ok(())
+        unsafe { self.map(addr, len, prot, flags, fd, offset) }
+            .map(|_| ())
+            .map_err(|code| MmapError::MmapFailed { code }.into())
     }
 
     unsafe fn map_zero_at(
@@ -200,19 +200,18 @@ impl Mmap for DefaultMmap {
         prot: ProtFlags,
         flags: MapFlags,
     ) -> Result<()> {
-        from_ret(
-            unsafe { raw_mmap(addr, len, prot, flags | MapFlags::MAP_ANONYMOUS, -1, 0) },
-            |code| Error::from(MmapError::MmapAnonymousFailed { code }),
-        )?;
-        Ok(())
+        unsafe { self.map(addr, len, prot, flags | MapFlags::MAP_ANONYMOUS, -1, 0) }
+            .map(|_| ())
+            .map_err(|code| MmapError::MmapAnonymousFailed { code }.into())
     }
 
+    /// Releases an owned mapping or a page-aligned subrange of it.
     unsafe fn munmap(&self, addr: VmAddr, len: usize) -> Result<()> {
         from_ret(
-            syscalls::raw_syscall!(Sysno::munmap, addr.as_mut_ptr::<c_void>(), len),
+            unsafe { syscalls::raw_syscall!(Sysno::munmap, addr.as_mut_ptr::<c_void>(), len) },
             |code| Error::from(MmapError::MunmapFailed { code }),
-        )?;
-        Ok(())
+        )
+        .map(|_| ())
     }
 
     #[inline]

@@ -109,23 +109,12 @@ region.mprotect(offset, len, prot)
 
 `HostRegion` is the common `RegionAccess` implementation for memory that the host process can access directly.
 
-It stores four fields:
+It retains the host pointer, visible length, and the information needed to control and release the memory. Ownership determines how the memory is released:
 
-```rust,ignore
-host_ptr: *mut c_void,
-len: usize,
-control: M,
-unmap_on_drop: bool,
-```
-
-`control` is the mmap backend used for platform operations such as `mprotect`, `madvise`, and `munmap`.
-
-The key field is `unmap_on_drop`. It decides who owns the memory lifetime:
-
-- `MappedRegion::local(...)`: this region owns the memory and calls `munmap` on drop.
+- `MappedRegion::local(...)`: this region owns a mapping managed by the backend and calls its `munmap` when the last clone is dropped.
 - `MappedRegion::local_alias(...)`: this region is only a borrowed alias and does not release memory on drop.
 
-That distinction matters. A region created by the loader through `create_space` should usually be `local`, because it owns the mapping. Memory already managed by the kernel or another object should use `local_alias` to avoid freeing memory it does not own.
+`AllocMmap` allocates using `SpaceLayout.align` with the minimum prefix `offset % align`. The returned region retains the original pointer and Rust `Layout` for direct `dealloc` when the last owner is dropped. Its raw `Mmap::munmap(addr, len)` returns an error because the address and length alone do not identify the original allocation layout.
 
 ### `MappedView`
 
@@ -189,8 +178,8 @@ This lets the loader support sparse ELF runtime ranges while still using one sha
 The `Mmap` backend creates and populates virtual address space. The loading flow is roughly:
 
 ```text
-1. create_space(...)
-   Create one owning MappedRegion.
+1. create_space(layout, prot, init)
+   Create one owning MappedRegion with a SpaceLayout and SpaceInit::Reserve, Zeroed, or File.
 
 2. map_file_at(...)
    If input comes from a file and can be mapped directly, map file pages into a subrange of the space.
@@ -205,7 +194,11 @@ The `Mmap` backend creates and populates virtual address space. The loading flow
    After relocation, switch segments to their final protections.
 ```
 
-The copy path does not need a separate `map_copy_at`. It relies on `create_space(..., populate_later = false)` returning writable, host-accessible memory. The loader then copies bytes into it directly. That keeps memory loading short and avoids one extra system call per segment.
+The copy path does not need a separate `map_copy_at`. It calls `create_space(..., SpaceInit::Zeroed)` with writable protection, then copies bytes directly into the zero-initialized, host-accessible memory. That keeps memory loading short and avoids one extra system call per segment. `SpaceInit::File { fd, offset }` can instead initialize the space with a private file mapping using the caller's `prot`; it does not impose read-only protection.
+
+`SpaceLayout { addr, len, align, offset }` describes the address layout independently of the initial contents. `addr` preserves the backend's address selection behavior: native backends use it as a placement hint, while allocator and fixed backends use it to select caller-owned storage. The backend returns a region of `len` bytes whose starting address satisfies `start % align == offset % align`. `len` must be nonzero and a multiple of the backend page size. `align` must be a power of two at least as large as the backend page size, and `offset` must be page-aligned. This offset describes address alignment; the file position is specified separately by `SpaceInit::File`. For program segments, the loader uses `min_vaddr` as the layout offset, so the load base `image_start - min_vaddr` satisfies the ELF alignment. Alignments larger than one page are handled by the backend.
+
+An initial file mapping can supply the first program segment. An empty file range in that first segment disables this reuse; later segments with empty file ranges still use the common population path. Overlapping segment pages select ordinary space reservation so mappings are applied in their original order, and gaps remain inaccessible. All file-backed segments share BSS handling: zeroing covers the rest of the partial file page, including padding beyond the segment's memory end used by interpreter bootstrap allocators; it temporarily adds write permission when needed and restores the original protection. Complete BSS pages use anonymous zero mappings.
 
 ## Unsafe Boundaries
 
@@ -232,8 +225,10 @@ The first is implementing `Mmap`. This is the right fit when you can still creat
 
 The important guarantees are:
 
-- `create_space(..., populate_later = false)` returns writable, host-accessible memory.
-- `create_space(..., populate_later = true)` may reserve address space first, then let `map_file_at` / `map_zero_at` populate subranges.
+- Every initialization mode honors `SpaceLayout`, including alignments larger than the backend page size and a nonzero alignment offset.
+- `create_space(..., SpaceInit::Zeroed)` initializes the entire range to zero and applies the requested `prot`. The copy path requests writable, host-accessible memory.
+- `create_space(..., SpaceInit::Reserve)` may reserve address space first, then let `map_file_at` / `map_zero_at` populate subranges before access.
+- `create_space(..., SpaceInit::File { fd, offset })` creates a private file mapping with the requested `prot`. A backend that cannot perform this initialization must return `MmapError::FileMappingUnsupported` without side effects. The loader can then use `Reserve` and populate segments with `map_file_at`; support for this operation is independent of support for whole-space file initialization. Other mapping errors propagate without fallback.
 - `munmap` only frees memory owned through `local`.
 - `map_file_at` and `map_zero_at` do not return regions; they populate an existing space.
 

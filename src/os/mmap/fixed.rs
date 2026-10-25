@@ -3,7 +3,7 @@ use core::ptr::{NonNull, copy_nonoverlapping, write_bytes};
 use crate::{
     MmapError, Result,
     memory::{MappedRegion, RegionAccess, VmAddr},
-    os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags},
+    os::{MadviseAdvice, MapFlags, Mmap, ProtFlags, SpaceInit, SpaceLayout},
 };
 
 /// A fixed-capacity mapping backed by caller-owned, host-accessible memory.
@@ -29,7 +29,7 @@ impl FixedMmap {
     /// - `host..host + len` must remain valid and exclusively owned by this
     ///   mapper while any returned mapping exists.
     /// - `addr` and `host` must refer to the same storage.
-    /// - Both addresses must be aligned to [`PageSize::Base`].
+    /// - Both addresses must be aligned to [`PageSize::Base`](crate::os::PageSize::Base).
     /// - The caller must prevent overlapping live mappings over the same range.
     #[inline]
     pub const unsafe fn new(addr: VmAddr, host: VmAddr, len: usize) -> Self {
@@ -54,12 +54,6 @@ impl FixedMmap {
             host: VmAddr::new(self.host.get() + offset),
             len,
         })
-    }
-
-    #[inline]
-    fn offset(&self, addr: VmAddr, len: usize) -> Result<usize> {
-        self.region(addr, len)
-            .map(|region| region.host.get() - self.host.get())
     }
 }
 
@@ -123,24 +117,21 @@ impl RegionAccess for FixedRegion {
 impl Mmap for FixedMmap {
     type Region = FixedRegion;
 
-    #[inline]
-    fn page_size(&self) -> PageSize {
-        PageSize::Base
-    }
-
     unsafe fn create_space(
         &self,
-        addr: Option<VmAddr>,
-        len: usize,
+        layout: SpaceLayout,
         _prot: ProtFlags,
-        _populate_later: bool,
+        init: SpaceInit,
     ) -> Result<MappedRegion<Self::Region>> {
-        let addr = addr.unwrap_or(self.addr);
-        if addr != self.addr {
+        if matches!(init, SpaceInit::File { .. }) {
+            return Err(MmapError::FileMappingUnsupported.into());
+        }
+        let addr = layout.addr.unwrap_or(self.addr);
+        if addr != self.addr || !layout.is_aligned(addr) {
             return Err(MmapError::InvalidMappedRegionRange.into());
         }
-        let region = self.region(addr, len)?;
-        unsafe { write_bytes(region.host.as_mut_ptr::<u8>(), 0, len) };
+        let region = self.region(addr, layout.len)?;
+        unsafe { write_bytes(region.host.as_mut_ptr::<u8>(), 0, layout.len) };
         Ok(MappedRegion::new(region))
     }
 
@@ -167,8 +158,8 @@ impl Mmap for FixedMmap {
         _prot: ProtFlags,
         _flags: MapFlags,
     ) -> Result<()> {
-        let offset = self.offset(addr, len)?;
-        unsafe { write_bytes(self.host.as_mut_ptr::<u8>().add(offset), 0, len) };
+        let region = self.region(addr, len)?;
+        unsafe { write_bytes(region.host.as_mut_ptr::<u8>(), 0, len) };
         Ok(())
     }
 

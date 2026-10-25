@@ -1,63 +1,19 @@
 use super::{
-    Symbol,
+    ExportTable, Symbol,
     module::{ModuleState, lookup_symbol},
 };
 use crate::{
     Result,
     arch::NativeArch,
-    elf::{ElfLayout, ElfSymbol, SymbolLookup, SymbolTable},
+    elf::{ElfSymbol, SymbolLookup},
     memory::{ImageMemory, VmAddr},
     relocation::RelocationArch,
     sync::Arc,
     tls::TlsModule,
 };
-use core::{any::Any, ffi::CStr};
+use core::any::Any;
 
 use super::search::ModuleSearch;
-
-/// Runtime symbol exports for a module.
-///
-/// Export backends may be backed by an ELF dynamic symbol table, an object export
-/// table, kernel export metadata, or a caller-provided synthetic table.
-pub trait SymbolExports<L: ElfLayout>: Send + Sync {
-    /// Visits symbols that can participate in exported-symbol lookup.
-    fn for_each(&self, visitor: &mut dyn FnMut(&ElfSymbol<L>));
-
-    /// Returns a NUL-terminated name borrowed from this export table.
-    fn symbol_name<'exports>(&'exports self, symbol: &ElfSymbol<L>) -> Option<&'exports CStr>;
-
-    /// Looks up one exported symbol by name and optional version.
-    ///
-    /// Mutable access permits hash caching only. Implementations must preserve
-    /// the requested name and version and must not replace `lookup`.
-    fn lookup<'exports>(
-        &'exports self,
-        lookup: &mut SymbolLookup<'_>,
-    ) -> Option<&'exports ElfSymbol<L>>;
-}
-
-impl<L> SymbolExports<L> for SymbolTable<L>
-where
-    L: ElfLayout,
-{
-    #[inline]
-    fn for_each(&self, visitor: &mut dyn FnMut(&ElfSymbol<L>)) {
-        self.hashtab.for_each(self.view(), visitor);
-    }
-
-    #[inline]
-    fn symbol_name<'exports>(&'exports self, symbol: &ElfSymbol<L>) -> Option<&'exports CStr> {
-        Some(self.strtab().get_cstr(symbol.st_name()))
-    }
-
-    #[inline]
-    fn lookup<'exports>(
-        &'exports self,
-        lookup: &mut SymbolLookup<'_>,
-    ) -> Option<&'exports ElfSymbol<L>> {
-        self.view().lookup(lookup)
-    }
-}
 
 /// A loaded or synthetic module that supplies symbols for relocation.
 ///
@@ -72,8 +28,9 @@ pub trait Module<Arch: RelocationArch = NativeArch>: Any + Send + Sync {
         None
     }
 
-    /// Returns the runtime symbol exports for this module.
-    fn exports(&self) -> &dyn SymbolExports<Arch::Layout>;
+    /// Returns this module's runtime exports. The table must remain stable
+    /// while borrowed, since relocation may retain it for the entire pass.
+    fn exports(&self) -> &ExportTable<Arch::Layout>;
 
     /// Returns this module's runtime memory view.
     fn memory(&self) -> &dyn ImageMemory;
@@ -81,7 +38,7 @@ pub trait Module<Arch: RelocationArch = NativeArch>: Any + Send + Sync {
     /// Resolves one of this module's exported symbols to its runtime address.
     ///
     /// `symbol` must describe a definition exposed by this module's
-    /// [`SymbolExports`]. Implementations define how ordinary, absolute, TLS,
+    /// [`ExportTable`]. Implementations define how ordinary, absolute, TLS,
     /// IFUNC, and module-specific symbols become target-visible addresses.
     fn resolve_symbol(&self, symbol: &ElfSymbol<Arch::Layout>) -> Result<VmAddr>;
 
@@ -189,7 +146,7 @@ where
     }
 
     #[inline]
-    fn exports(&self) -> &dyn SymbolExports<Arch::Layout> {
+    fn exports(&self) -> &ExportTable<Arch::Layout> {
         (**self).exports()
     }
 

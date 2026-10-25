@@ -235,9 +235,9 @@ impl<L: ElfLayout> ElfGnuHash<L> {
 impl<L: ElfLayout> ElfGnuHash<L> {
     /// Reuses a relocation's own definition when no earlier chain candidate
     /// can win. Equal hashes fall back to ordinary name/version lookup.
-    fn lookup_known_symbol<'sym, H>(
+    fn lookup_known_symbol<'sym>(
         &self,
-        table: SymbolTableView<'sym, L, H>,
+        table: SymbolTableView<'sym, L>,
         lookup: &SymbolLookup<'_>,
     ) -> Option<&'sym ElfSymbol<L>> {
         let address = lookup.symbol_hint()?;
@@ -276,9 +276,9 @@ impl<L: ElfLayout> ElfGnuHash<L> {
         Some(symbol)
     }
 
-    pub(crate) fn for_each<H>(
+    pub(crate) fn for_each(
         &self,
-        table: SymbolTableView<'_, L, H>,
+        table: SymbolTableView<'_, L>,
         visitor: &mut dyn FnMut(&ElfSymbol<L>),
     ) {
         let start = self.header.symbias as usize;
@@ -306,9 +306,9 @@ impl<L: ElfLayout> ElfGnuHash<L> {
     /// # Returns
     /// * `Some(symbol)` - A reference to the found symbol
     /// * `None` - If the symbol was not found
-    pub(crate) fn lookup<'sym, H>(
+    pub(crate) fn lookup<'sym>(
         &self,
-        table: SymbolTableView<'sym, L, H>,
+        table: SymbolTableView<'sym, L>,
         lookup: &mut SymbolLookup<'_>,
     ) -> Option<&'sym ElfSymbol<L>> {
         if let Some(symbol) = self.lookup_known_symbol(table, lookup) {

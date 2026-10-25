@@ -31,10 +31,9 @@ impl RelocationObserver for BindingRecorder {
         D: Send + Sync + 'static,
         R: RegionAccess,
         Tls: TlsResolver<NativeArch>,
-        H,
     >(
         &mut self,
-        event: &mut RelocationEvent<'_, D, NativeArch, R, Tls, H>,
+        event: &mut RelocationEvent<'_, D, NativeArch, R, Tls>,
     ) -> elf_loader::Result<HandleResult> {
         let symbol = event
             .relocation_symbol()
@@ -139,10 +138,9 @@ impl RelocationObserver for FallbackRecorder {
         D: Send + Sync + 'static,
         R: RegionAccess,
         Tls: TlsResolver<NativeArch>,
-        H,
     >(
         &mut self,
-        event: &mut RelocationEvent<'_, D, NativeArch, R, Tls, H>,
+        event: &mut RelocationEvent<'_, D, NativeArch, R, Tls>,
     ) -> elf_loader::Result<HandleResult> {
         let symbol = event
             .relocation_symbol()
@@ -163,10 +161,9 @@ impl RelocationObserver for FallbackRecorder {
         D: Send + Sync + 'static,
         R: RegionAccess,
         Tls: TlsResolver<NativeArch>,
-        H,
     >(
         &mut self,
-        event: &mut RelocationEvent<'_, D, NativeArch, R, Tls, H>,
+        event: &mut RelocationEvent<'_, D, NativeArch, R, Tls>,
     ) -> elf_loader::Result<HandleResult> {
         let symbol = event
             .relocation_symbol()

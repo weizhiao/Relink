@@ -20,7 +20,6 @@ use crate::{
 
 pub use dylib::RawDylib;
 pub(crate) use dynamic::DynamicInfo;
-pub(crate) use dynamic::PltRelocInfo;
 pub use dynamic::RawDynamic;
 pub use exec::{LoadedExec, RawExec, StaticExec};
 #[cfg(feature = "object")]

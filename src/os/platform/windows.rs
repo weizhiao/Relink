@@ -2,7 +2,7 @@ use crate::{
     IoError, MmapError, Result,
     input::{FileBacking, ModuleSourceId, Path},
     memory::{HostRegion, MappedRegion, VmAddr},
-    os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags},
+    os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags, SpaceInit, SpaceLayout},
 };
 use alloc::vec::Vec;
 use core::{
@@ -159,11 +159,12 @@ pub(crate) struct RawFile {
     mapping: HANDLE,
 }
 
-fn prot_win(prot: ProtFlags, is_create_file_mapping: bool) -> PAGE_PROTECTION_FLAGS {
+fn prot_win(prot: ProtFlags, is_file_mapping: bool) -> PAGE_PROTECTION_FLAGS {
     match prot.bits() {
+        0 => PAGE_NOACCESS,
         1 => PAGE_READONLY,
         0b10 | 0b11 => {
-            if is_create_file_mapping {
+            if is_file_mapping {
                 PAGE_WRITECOPY
             } else {
                 PAGE_READWRITE
@@ -172,15 +173,15 @@ fn prot_win(prot: ProtFlags, is_create_file_mapping: bool) -> PAGE_PROTECTION_FL
         // PAGE_EXECUTE is not supported by the CreateFileMapping function:
         // https://learn.microsoft.com/en-us/windows/win32/memory/memory-protection-constants.
         0b100 => {
-            if is_create_file_mapping {
+            if is_file_mapping {
                 PAGE_EXECUTE_READ
             } else {
                 PAGE_EXECUTE
             }
         }
         0b101 => PAGE_EXECUTE_READ,
-        0b111 => {
-            if is_create_file_mapping {
+        0b110 | 0b111 => {
+            if is_file_mapping {
                 PAGE_EXECUTE_WRITECOPY
             } else {
                 PAGE_EXECUTE_READWRITE
@@ -211,39 +212,76 @@ impl Mmap for DefaultMmap {
 
     unsafe fn create_space(
         &self,
-        addr: Option<VmAddr>,
-        len: usize,
+        layout: SpaceLayout,
         prot: ProtFlags,
-        populate_later: bool,
+        init: SpaceInit,
     ) -> Result<MappedRegion<Self::Region>> {
-        let ptr = if populate_later {
-            unsafe {
+        if matches!(init, SpaceInit::File { .. }) {
+            return Err(MmapError::FileMappingUnsupported.into());
+        }
+        let mut info = MaybeUninit::<SYSTEM_INFO>::uninit();
+        unsafe { GetSystemInfo(info.as_mut_ptr()) };
+        let info = unsafe { info.assume_init() };
+        let page_size = info.dwPageSize as usize;
+        let padding = layout.align - page_size;
+        let allocation_len = layout
+            .len
+            .checked_add(padding)
+            .ok_or(MmapError::InvalidMappedRegionRange)?;
+        // Windows requires reservation hints at allocation granularity, while
+        // the image can begin at any page-aligned position inside that range.
+        let hint = layout
+            .addr
+            .map(|addr| VmAddr::new(addr.get() & !(info.dwAllocationGranularity as usize - 1)));
+        let protection = if matches!(init, SpaceInit::Zeroed) {
+            prot_win(prot, false)
+        } else {
+            PAGE_NOACCESS
+        };
+        let ptr = match init {
+            SpaceInit::File { .. } => unreachable!("file initialization was rejected"),
+            SpaceInit::Reserve => unsafe {
                 Memory::VirtualAlloc2(
                     GetCurrentProcess(),
-                    addr.map_or(null(), |addr| addr.as_mut_ptr::<c_void>().cast_const()),
-                    len,
+                    hint.map_or(null(), |addr| addr.as_mut_ptr::<c_void>().cast_const()),
+                    allocation_len,
                     MEM_RESERVE | MEM_RESERVE_PLACEHOLDER,
                     PAGE_NOACCESS,
                     null_mut(),
                     0,
                 )
-            }
-        } else {
-            unsafe {
+            },
+            SpaceInit::Zeroed => unsafe {
                 Memory::VirtualAlloc(
-                    addr.map_or(null(), |addr| addr.as_mut_ptr::<c_void>()),
-                    len,
-                    MEM_RESERVE | MEM_COMMIT,
-                    prot_win(prot, false),
+                    hint.map_or(null(), |addr| addr.as_mut_ptr::<c_void>()),
+                    allocation_len,
+                    MEM_RESERVE | if padding == 0 { MEM_COMMIT } else { 0 },
+                    if padding == 0 {
+                        protection
+                    } else {
+                        PAGE_NOACCESS
+                    },
                 )
-            }
+            },
         };
         if ptr.is_null() {
             let err_code = unsafe { GetLastError() };
             return Err(MmapError::VirtualAlloc { code: err_code }.into());
         }
-        // SAFETY: the successful allocation above transfers ownership of this range.
-        Ok(unsafe { MappedRegion::local(ptr, len, *self) })
+        let offset = layout.padding_at(VmAddr::from_ptr(ptr));
+        let visible = unsafe { ptr.cast::<u8>().add(offset).cast::<c_void>() };
+        if matches!(init, SpaceInit::Zeroed)
+            && padding != 0
+            && unsafe { Memory::VirtualAlloc(visible, layout.len, MEM_COMMIT, protection) }
+                .is_null()
+        {
+            let code = unsafe { GetLastError() };
+            unsafe { VirtualFree(ptr, 0, MEM_RELEASE) };
+            return Err(MmapError::VirtualAlloc { code }.into());
+        }
+        // Padding stays reserved and inaccessible. Keep its ownership so later
+        // placeholder splits and committed pages are released together.
+        Ok(unsafe { MappedRegion::local(visible, layout.len, ptr, allocation_len, *self) })
     }
 
     unsafe fn alias_space(&self, addr: VmAddr, len: usize) -> Result<MappedRegion<Self::Region>> {
@@ -374,12 +412,15 @@ impl Mmap for DefaultMmap {
     }
 
     unsafe fn mprotect(&self, addr: VmAddr, len: usize, prot: ProtFlags) -> Result<()> {
+        // Temporary writes to file-backed pages must retain copy-on-write semantics.
+        let is_file_mapping =
+            prot.contains(ProtFlags::PROT_WRITE) && query_memory(addr.get())?.Type == MEM_MAPPED;
         let mut old = MaybeUninit::uninit();
         if unsafe {
             Memory::VirtualProtect(
                 addr.as_mut_ptr(),
                 len,
-                prot_win(prot, false),
+                prot_win(prot, is_file_mapping),
                 old.as_mut_ptr(),
             )
         } == 0

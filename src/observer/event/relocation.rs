@@ -1,7 +1,7 @@
 use super::lifecycle::{LifecycleHandlers, LifecycleRunner};
 use crate::{
     arch::NativeArch,
-    elf::{ElfRelEntry, ElfRelType, ElfSymbol, HashTable, SymbolEntry, SymbolTableView},
+    elf::{ElfRelEntry, ElfRelType, ElfSymbol, SymbolEntry, SymbolTableView},
     image::{ElfCore, LocalScope},
     input::Path,
     lazy::LazyValues,
@@ -20,17 +20,16 @@ pub struct RelocationEvent<
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
-    H = HashTable<<Arch as RelocationArch>::Layout>,
 > {
     core: &'a ElfCore<D, Arch, R, Tls>,
     rel: &'a ElfRelType<Arch>,
     resolver: &'a SymbolResolver<'a, Arch>,
     bindings: &'a mut BindingDeps,
-    symbols: SymbolTableView<'a, Arch::Layout, H>,
+    symbols: SymbolTableView<'a, Arch::Layout>,
 }
 
-impl<'a, D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>, H>
-    RelocationEvent<'a, D, Arch, R, Tls, H>
+impl<'a, D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    RelocationEvent<'a, D, Arch, R, Tls>
 {
     /// Construct a new `RelocationEvent`.
     #[inline]
@@ -39,7 +38,7 @@ impl<'a, D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: T
         rel: &'a ElfRelType<Arch>,
         resolver: &'a SymbolResolver<'a, Arch>,
         bindings: &'a mut BindingDeps,
-        symbols: SymbolTableView<'a, Arch::Layout, H>,
+        symbols: SymbolTableView<'a, Arch::Layout>,
     ) -> Self {
         Self {
             core,

@@ -76,9 +76,14 @@ impl<'a, Arch: RelocationArch> LazyRuntime<'a, Arch> {
     /// Returns one PLT relocation by lazy relocation index.
     #[inline]
     pub fn plt_relocation(&self, rela_idx: usize) -> Option<LazyPltReloc<'_, Arch>> {
-        let plt = self.core().plt()?;
-        let rel = plt.relocs.as_slice().get(rela_idx)?;
-        let symbol = plt.symbols.view().entry(rel.r_symbol());
+        let rel = self.core().plt()?.as_slice().get(rela_idx)?;
+        let symbol = self
+            .core()
+            .module()
+            .exports()
+            .elf_symbols()
+            .view()
+            .entry(rel.r_symbol());
         Some(LazyPltReloc { rel, symbol })
     }
 

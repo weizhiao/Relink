@@ -13,7 +13,6 @@ use crate::{
     runtime::Domain,
     tls::TlsResolver,
 };
-use alloc::boxed::Box;
 
 /// Builder for creating relocatable ELF objects.
 pub(crate) struct ObjectBuilder<
@@ -55,8 +54,7 @@ where
         Memory: ImageMemory + ?Sized,
     {
         let array: &[usize] = section_entries(memory, lifecycle_array_shdr)?;
-        let array = array.iter().copied().map(VmAddr::new).collect::<Box<[_]>>();
-        Ok(Lifecycle::new(None, Some(array)))
+        Ok(Lifecycle::new(None, array.iter().copied().map(VmAddr::new)))
     }
 
     fn prepare_section_data<Memory>(
@@ -67,8 +65,8 @@ where
         Memory: ImageMemory + ?Sized,
     {
         let mut symtab = None;
-        let mut init = Lifecycle::new(None, None);
-        let mut fini = Lifecycle::new(None, None);
+        let mut init = Lifecycle::default();
+        let mut fini = Lifecycle::default();
 
         for shdr in shdrs {
             match shdr.section_type() {

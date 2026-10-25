@@ -1,7 +1,6 @@
 //! ELF initialization and finalization metadata.
 
 use crate::memory::VmAddr;
-use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 /// ELF lifecycle functions associated with `.init`, `.init_array`, `.fini`, or `.fini_array`.
@@ -15,16 +14,19 @@ pub struct Lifecycle {
 }
 
 impl Lifecycle {
-    pub(crate) fn new(func: Option<VmAddr>, func_array: Option<Box<[VmAddr]>>) -> Self {
-        let len = usize::from(func.is_some()) + func_array.as_ref().map_or(0, |array| array.len());
+    pub(crate) fn new(
+        func: Option<VmAddr>,
+        func_array: impl ExactSizeIterator<Item = VmAddr>,
+    ) -> Self {
+        let len = usize::from(func.is_some()) + func_array.len();
         let mut funcs = Vec::with_capacity(len);
-        funcs.extend(func);
-        if let Some(array) = func_array {
-            funcs.extend(array);
-        }
         // .init_array/.fini_array may carry 0 and -1 sentinel entries that
         // bionic and glibc skip; calling them would jump to a null address.
-        funcs.retain(|addr| addr.get() != 0 && addr.get() != usize::MAX);
+        funcs.extend(
+            func.into_iter()
+                .chain(func_array)
+                .filter(|addr| addr.get() != 0 && addr.get() != usize::MAX),
+        );
         Self { funcs }
     }
 

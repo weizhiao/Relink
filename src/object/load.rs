@@ -423,22 +423,24 @@ mod tests {
         bytes
     }
 
-    fn make_metadata_object() -> Vec<u8> {
+    fn make_metadata_object(with_bss: bool) -> Vec<u8> {
         const SYMTAB_NAME: u32 = 1;
         const STRTAB_NAME: u32 = 9;
         const SHSTRTAB_NAME: u32 = 17;
+        const BSS_NAME: u32 = 27;
 
         let ehdr_size = <NativeElfLayout as ElfLayout>::EHDR_SIZE;
         let shdr_size = size_of::<ElfShdr>();
         let sym_size = size_of::<ElfSymbol>();
         let strtab = b"\0";
-        let shstrtab = b"\0.symtab\0.strtab\0.shstrtab\0";
-        let symtab_offset = ehdr_size + shdr_size * 4;
+        let shstrtab = b"\0.symtab\0.strtab\0.shstrtab\0.bss\0";
+        let shnum = 4 + usize::from(with_bss);
+        let symtab_offset = ehdr_size + shdr_size * shnum;
         let strtab_offset = symtab_offset + sym_size;
         let shstrtab_offset = strtab_offset + strtab.len();
         let mut bytes = alloc::vec![0u8; shstrtab_offset + shstrtab.len()];
 
-        let mut ehdr = make_raw_object_header(shdr_size, 4);
+        let mut ehdr = make_raw_object_header(shdr_size, shnum);
         ehdr.e_shstrndx = 3;
         write_value(&mut bytes, 0, &ehdr);
 
@@ -496,6 +498,21 @@ mod tests {
         write_value(&mut bytes, ehdr_size + shdr_size, &symtab_shdr);
         write_value(&mut bytes, ehdr_size + shdr_size * 2, &strtab_shdr);
         write_value(&mut bytes, ehdr_size + shdr_size * 3, &shstrtab_shdr);
+        if with_bss {
+            let bss_shdr: ElfShdr<NativeElfLayout> = ElfShdr::new(
+                BSS_NAME,
+                ElfSectionType::NOBITS,
+                ElfSectionFlags::ALLOC | ElfSectionFlags::WRITE,
+                0,
+                0,
+                1,
+                0,
+                0,
+                1,
+                0,
+            );
+            write_value(&mut bytes, ehdr_size + shdr_size * 4, &bss_shdr);
+        }
         write_value(&mut bytes, symtab_offset, &null_sym);
         write_bytes(&mut bytes, strtab_offset, strtab);
         write_bytes(&mut bytes, shstrtab_offset, shstrtab);
@@ -631,18 +648,41 @@ mod tests {
             .run(Domain::native(AddressSpaceId::PROCESS))
             .with_observer(&mut observer);
 
-        let _ = run.load_object(ElfBinary::owned("metadata.o", make_metadata_object()));
+        let _object = run
+            .load_object(ElfBinary::owned("metadata.o", make_metadata_object(true)))
+            .expect("object with a nonempty .bss section should load");
         drop(run);
 
         assert_eq!(observer.found_shstrtab, Some(ElfSectionId::new(3)));
         assert!(observer.shstrtab_name_seen);
         assert_eq!(
             observer.shstrtab_len,
-            b"\0.symtab\0.strtab\0.shstrtab\0".len()
+            b"\0.symtab\0.strtab\0.shstrtab\0.bss\0".len()
         );
         assert!(observer.borrowed_shstrtab);
         assert!(observer.renamed_shstrtab);
         assert!(observer.after_object_name_seen);
         assert!(observer.after_object_load_seen);
+    }
+
+    #[test]
+    fn load_object_rejects_empty_mapping_before_after_observer() {
+        let mut observer = ObjectObserver::default();
+        let loader = Loader::new().with_data::<ObjectData>();
+        let mut run = loader
+            .run(Domain::native(AddressSpaceId::PROCESS))
+            .with_observer(&mut observer);
+
+        let result = run.load_object(ElfBinary::owned("metadata.o", make_metadata_object(false)));
+        drop(run);
+
+        assert!(matches!(
+            result,
+            Err(Error::ParseShdr(ParseShdrError::Malformed {
+                detail: "section mapping range is empty"
+            }))
+        ));
+        assert_eq!(observer.found_shstrtab, Some(ElfSectionId::new(3)));
+        assert!(!observer.after_object_load_seen);
     }
 }

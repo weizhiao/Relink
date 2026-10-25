@@ -3,11 +3,58 @@ use crate::memory::{MappedRegion, RegionAccess, VmAddr};
 use crate::{Result, input::FileBacking};
 use alloc::sync::Arc;
 
+/// Address preference, size, and alignment of a newly created mapping.
+#[derive(Clone, Copy, Debug)]
+pub struct SpaceLayout {
+    /// Optional page-aligned address. Native backends treat it as a placement
+    /// hint; allocator and fixed backends use it to select caller-owned storage.
+    pub addr: Option<VmAddr>,
+    /// Nonzero number of bytes in the returned region, a multiple of the backend's page size.
+    pub len: usize,
+    /// Power-of-two address alignment, at least the backend's page size.
+    pub align: usize,
+    /// Page-aligned address offset: the region's address must be congruent to
+    /// this value modulo `align`. Zero requests an aligned region start.
+    pub offset: usize,
+}
+
+impl SpaceLayout {
+    #[inline]
+    pub(crate) fn is_aligned(self, addr: VmAddr) -> bool {
+        self.padding_at(addr) == 0
+    }
+
+    /// Returns the leading padding needed to satisfy this layout's alignment.
+    /// The caller must reserve enough space for the padding and region.
+    #[inline]
+    pub(crate) fn padding_at(self, addr: VmAddr) -> usize {
+        self.offset.wrapping_sub(addr.get()) & (self.align - 1)
+    }
+}
+
+/// Initial contents of a newly created address range.
+#[derive(Clone, Copy, Debug)]
+pub enum SpaceInit {
+    /// Reserves space for later file or zero-page mappings. Its contents and
+    /// access permissions are not guaranteed until the range is populated.
+    Reserve,
+    /// Clears the entire range, including caller-owned storage, and applies the
+    /// requested permissions.
+    Zeroed,
+    /// Creates a private file mapping with the requested permissions.
+    File {
+        /// Borrowed readable file descriptor or platform handle.
+        fd: isize,
+        /// Page-aligned starting offset in the file.
+        offset: usize,
+    },
+}
+
 /// Creates and manages memory mappings for loaded images.
 ///
-/// [`Self::create_space`] returns the owner of a mapping. File and zero-page
-/// operations fill subranges without taking ownership. Implementations must
-/// support concurrent calls and report mapping failures.
+/// [`Self::create_space`] returns an owned mapping. File and zero-page operations
+/// fill subranges without taking ownership. Implementations must support
+/// concurrent calls and report mapping failures.
 pub trait Mmap: Send + Sync + 'static {
     /// Region type created by this mapping backend.
     type Region: RegionAccess;
@@ -32,22 +79,42 @@ pub trait Mmap: Send + Sync + 'static {
         Ok(None)
     }
 
-    /// Creates an owned address range of `len` bytes, preferring `addr` if supplied.
+    /// Creates an owned address range with the requested size and alignment,
+    /// using `layout.addr` as the backend's placement hint or storage address.
     ///
-    /// If `populate_later` is false, zero the entire range and apply `prot`, including
-    /// for allocator-backed or caller-owned storage. Callers writing into it must
-    /// request writable protection. Otherwise, reservation alone is sufficient;
-    /// populate file or zero pages before accessing them.
+    /// The returned region has `layout.len` bytes and its address is congruent to
+    /// `layout.offset` modulo `layout.align`, for every initialization mode.
+    /// Fixed or caller-owned storage must satisfy this constraint before any
+    /// initialization; otherwise the backend returns an error.
+    ///
+    /// [`SpaceInit::Zeroed`] initializes the entire range to zero, while
+    /// [`SpaceInit::File`] maps file contents. Both use `prot`; callers writing
+    /// into the range must request writable protection. [`SpaceInit::Reserve`]
+    /// only requires reservation; populate file or zero pages before access.
+    ///
+    /// If file initialization is unsupported, return
+    /// [`crate::error::MmapError::FileMappingUnsupported`] without creating a mapping or
+    /// modifying caller-owned storage. The caller may then reserve space and use
+    /// [`Self::map_file_at`], which is a separate backend capability. Other mapping
+    /// errors must be propagated rather than treated as unsupported initialization.
     ///
     /// # Safety
-    /// `addr` must be page-aligned. Caller-owned storage must remain valid and be
-    /// exclusively available for initialization and loading.
+    /// `layout.len` must be nonzero and a multiple of the backend's page size.
+    /// `layout.addr`, when supplied, and `layout.offset` must be page-aligned.
+    /// `layout.align` must be a power of two at least as large as the backend's
+    /// page size. Caller-owned storage must remain valid and be exclusively
+    /// available for initialization and loading.
+    ///
+    /// For file initialization, `offset` must be page-aligned and `fd` readable.
+    /// The mapping may extend past EOF: replace whole pages beyond EOF before
+    /// accessing them, and apply each segment's final permissions before exposing
+    /// the image. Unused gaps may remain mapped but must be inaccessible. The
+    /// partial EOF page follows the backend's file-tail rules.
     unsafe fn create_space(
         &self,
-        addr: Option<VmAddr>,
-        len: usize,
+        layout: SpaceLayout,
         prot: ProtFlags,
-        populate_later: bool,
+        init: SpaceInit,
     ) -> Result<MappedRegion<Self::Region>>;
 
     /// Borrows an existing mapping without changing its contents or unmapping it on drop.
@@ -57,7 +124,7 @@ pub trait Mmap: Send + Sync + 'static {
     /// `addr..addr + len` must remain mapped for the returned region's lifetime.
     unsafe fn alias_space(&self, addr: VmAddr, len: usize) -> Result<MappedRegion<Self::Region>>;
 
-    /// Maps file contents into a subrange owned by [`Self::create_space`].
+    /// Maps file contents into a subrange of an owned mapping created by this backend.
     /// The backend must prepare the subrange, splitting reservations if needed.
     /// Unsupported operations must return an error.
     ///
@@ -76,8 +143,8 @@ pub trait Mmap: Send + Sync + 'static {
 
     /// Maps or commits anonymous zero-filled pages into an already-created space.
     ///
-    /// The mapped range is owned by the surrounding space created with
-    /// [`Mmap::create_space`]. The backend must prepare the target subrange,
+    /// The mapped range is owned by the surrounding space created with this
+    /// backend. The backend must prepare the target subrange,
     /// including splitting address reservations when the platform requires it.
     ///
     /// # Safety
@@ -91,11 +158,17 @@ pub trait Mmap: Send + Sync + 'static {
         flags: MapFlags,
     ) -> Result<()>;
 
-    /// Releases a mapping created by [`Self::create_space`].
+    /// Releases an owned mapping created by this backend.
+    ///
+    /// A region that owns its storage directly can release it on drop instead.
+    /// Such a backend may reject this operation when the address and length do
+    /// not provide enough information to release that storage.
     ///
     /// # Safety
-    /// `addr` must be page-aligned, and `addr` and `len` must match the original
-    /// mapping. No code may access the region after it is unmapped.
+    /// `addr` must be page-aligned, and `addr` and `len` must describe an owned
+    /// range that this backend supports releasing independently. Unless the
+    /// backend supports partial unmapping, they must match the original mapping.
+    /// No code may access the released range after it is unmapped.
     unsafe fn munmap(&self, addr: VmAddr, len: usize) -> Result<()>;
 
     /// Applies memory-usage advice to a mapped range.
@@ -135,12 +208,11 @@ where
     #[inline]
     unsafe fn create_space(
         &self,
-        addr: Option<VmAddr>,
-        len: usize,
+        layout: SpaceLayout,
         prot: ProtFlags,
-        populate_later: bool,
+        init: SpaceInit,
     ) -> Result<MappedRegion<Self::Region>> {
-        unsafe { (**self).create_space(addr, len, prot, populate_later) }
+        unsafe { (**self).create_space(layout, prot, init) }
     }
 
     #[inline]

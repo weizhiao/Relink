@@ -657,19 +657,16 @@ impl LifecycleSpec {
         let array = self
             .array_offset
             .map(|offset| -> Result<_> {
-                let words = segments
+                segments
                     .read_view::<L::Word>(VmOffset::new(offset.get()), self.array_byte_len)
-                    .ok_or_else(|| ParseDynamicError::malformed_table(tag, malformed))?;
-
-                Ok(words
-                    .as_slice()
-                    .iter()
-                    .copied()
-                    .map(|addr| VmAddr::new(addr.to_usize()))
-                    .collect())
+                    .ok_or_else(|| ParseDynamicError::malformed_table(tag, malformed).into())
             })
             .transpose()?;
-        Ok(Lifecycle::new(self.func, array))
+        let words = array.as_ref().map_or(&[][..], MappedView::as_slice);
+        Ok(Lifecycle::new(
+            self.func,
+            words.iter().map(|addr| VmAddr::new(addr.to_usize())),
+        ))
     }
 }
 

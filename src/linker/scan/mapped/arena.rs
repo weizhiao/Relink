@@ -4,7 +4,7 @@ use crate::{
     LinkerError, Result,
     entity::SecondaryMap,
     memory::{HostRegion, MappedRegion, RegionAccess, VmAddr, align_up},
-    os::{Mmap, ProtFlags},
+    os::{Mmap, ProtFlags, SpaceInit, SpaceLayout},
     relocation::RelocationArch,
     tls::TlsResolver,
 };
@@ -42,6 +42,8 @@ impl<R: RegionAccess> MappedArenaMap<R> {
         let layout = plan.memory_layout();
         let mut arena_layouts = Vec::new();
         let mut total_len = 0usize;
+        let page_size = mapper.page_size().bytes();
+        let mut align = page_size;
 
         for (id, arena) in layout.arena_pairs() {
             let len = layout.usage(id).mapped_len();
@@ -49,7 +51,15 @@ impl<R: RegionAccess> MappedArenaMap<R> {
                 continue;
             }
 
-            total_len = align_up(total_len, arena.page_size().bytes());
+            let arena_page_size = arena.page_size().bytes();
+            if !arena_page_size.is_power_of_two() || arena_page_size < page_size {
+                return Err(LinkerError::mapped_arena(
+                    "arena page size must be a power of two at least as large as the backend page size",
+                )
+                .into());
+            }
+            align = align.max(arena_page_size);
+            total_len = align_up(total_len, arena_page_size);
             let region_offset = total_len;
             total_len = total_len.checked_add(len).ok_or_else(|| {
                 LinkerError::mapped_arena("mapped section arena allocation length overflowed")
@@ -66,10 +76,14 @@ impl<R: RegionAccess> MappedArenaMap<R> {
 
         let region = unsafe {
             mapper.create_space(
-                Some(VmAddr::null()),
-                total_len,
+                SpaceLayout {
+                    addr: Some(VmAddr::null()),
+                    len: total_len,
+                    align,
+                    offset: 0,
+                },
                 ProtFlags::PROT_READ | ProtFlags::PROT_WRITE | ProtFlags::PROT_EXEC,
-                false,
+                SpaceInit::Zeroed,
             )
         }?;
         let mut arenas = Self {
@@ -176,9 +190,7 @@ impl MappedArena {
 
     #[inline]
     fn end(&self) -> usize {
-        self.region_offset
-            .checked_add(self.len)
-            .expect("mapped section arena range overflowed")
+        self.region_offset + self.len
     }
 
     #[inline]
@@ -205,16 +217,11 @@ impl MappedArena {
         bytes: &[u8],
     ) -> Result<()> {
         self.check_range(offset, bytes.len())?;
-        let region_offset = self.region_offset.checked_add(offset).ok_or_else(|| {
-            LinkerError::mapped_arena("mapped section arena write offset overflowed")
-        })?;
+        let region_offset = self.region_offset + offset;
         unsafe { region.write_bytes(region_offset, bytes) }
     }
 
     fn protect<R: RegionAccess>(&self, region: &MappedRegion<R>) -> Result<()> {
-        if self.len == 0 {
-            return Ok(());
-        }
         unsafe {
             region.mprotect(
                 self.region_offset,
@@ -298,15 +305,29 @@ mod tests {
             .find(|section| plan.memory_layout().section(*section).name() == b".data")
             .unwrap();
 
+        let mapper = AllocMmap::new();
+        plan.set_materialization(root, Materialization::SectionRegions);
+        // Planning can use custom page sizes; mapping must reject sizes that
+        // cannot preserve the backend's allocation and protection boundaries.
+        for page_size in [
+            PageSize::new(mapper.page_size().bytes() / 2).unwrap(),
+            PageSize::Custom(core::num::NonZeroUsize::new(3 * PageSize::BASE_BYTES).unwrap()),
+        ] {
+            let arena = plan.memory_layout_mut().create_arena(ArenaDescriptor::new(
+                page_size,
+                MemoryClass::WritableData,
+                ArenaSharing::Shared,
+            ));
+            assert!(plan.memory_layout_mut().assign(section, arena, 0));
+            assert!(MappedArenaMap::map_plan(&mapper, &plan).is_err());
+        }
+
         let arena = plan.memory_layout_mut().create_arena(ArenaDescriptor::new(
             PageSize::Base,
             MemoryClass::WritableData,
             ArenaSharing::Shared,
         ));
         assert!(plan.memory_layout_mut().assign(section, arena, 0));
-        plan.set_materialization(root, Materialization::SectionRegions);
-
-        let mapper = AllocMmap::new();
         let mut mapped = MappedArenaMap::map_plan(&mapper, &plan).unwrap().unwrap();
         mapped.populate(&mut plan).unwrap();
 

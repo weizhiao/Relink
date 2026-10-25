@@ -122,8 +122,8 @@ pub trait RelocationArch: 'static {
     /// before the observer post-hook. Return [`HandleResult::Unhandled`] to
     /// leave the relocation to the observer.
     #[inline]
-    fn relocate_custom<D, R, Tls, H>(
-        _event: &mut RelocationEvent<'_, D, Self, R, Tls, H>,
+    fn relocate_custom<D, R, Tls>(
+        _event: &mut RelocationEvent<'_, D, Self, R, Tls>,
     ) -> Result<HandleResult>
     where
         Self: Sized,
@@ -149,9 +149,9 @@ pub trait ObjectArch: RelocationArch {
 
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
-    fn prepare_relocation<D, R, Tls, Obs, H, Memory>(
+    fn prepare_relocation<D, R, Tls, Obs, Memory>(
         _state: &mut Self::State,
-        _helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, H, Memory>,
+        _helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, Memory>,
         _shdrs: &[ElfShdr<Self::Layout>],
     ) -> Result<()>
     where
@@ -167,9 +167,9 @@ pub trait ObjectArch: RelocationArch {
 
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
-    fn relocate<D, R, Tls, Obs, H, Memory>(
+    fn relocate<D, R, Tls, Obs, Memory>(
         _state: &mut Self::State,
-        helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, H, Memory>,
+        helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, Memory>,
         rel: &ElfRelType<Self>,
         _target: &ElfShdr<Self::Layout>,
         _pltgot: &mut PltGotSection,

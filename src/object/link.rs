@@ -1,23 +1,23 @@
 use crate::{
     Error, RelocReason, Result,
     elf::{
-        ElfRelType, ElfSectionId, ElfSectionIndex, ElfSectionType, ElfShdr, ElfSymbol,
+        ElfLayout, ElfRelType, ElfSectionId, ElfSectionIndex, ElfSectionType, ElfShdr, ElfSymbol,
         ElfSymbolType,
     },
-    image::{ElfCore, GlobalScope, LoadedCore, LoadedObject, RawObject, SymbolExports},
+    image::{
+        ElfCore, GlobalScope, LoadedCore, LoadedObject, RawObject, SymbolLookup, SymbolMap,
+        SymbolName, SyntheticSymbol,
+    },
     lazy::LazyBinder,
     logging,
     memory::{RegionAccess, VmAddr, VmOffset},
-    object::{
-        ObjectExports, ObjectSections, ObjectSegmentView, ObjectSymbolTable, section_entries,
-    },
+    object::{ObjectSections, ObjectSegmentView, ObjectSymbolTable, section_entries},
     observer::{LifecycleRunner, ObjectRelocatedEvent, RelocationObserver, SymbolBindingEvent},
     relocate_context_error,
     relocation::{
         BindingDeps, ObjectArch, RelocHelper, RelocateArgs, RelocationArch, SymDef, SymbolResolver,
     },
     runtime::CodeContext,
-    sync::{Arc, arc_unsize},
     tls::TlsResolver,
 };
 
@@ -81,7 +81,7 @@ where
         let source = self.core.module_handle();
         let resolver = SymbolResolver::new(
             &source,
-            scope,
+            &scope,
             global_snapshot.as_ref(),
             symbols.as_deref(),
             self.core.symbolic(),
@@ -136,7 +136,7 @@ where
         }
 
         let bindings = helper.into_bindings();
-        let scope = resolver.into_scope();
+        drop(resolver);
 
         let initializer = LifecycleRunner::new(core::mem::take(&mut self.init));
         let finalizer = LifecycleRunner::new(core::mem::take(&mut self.fini));
@@ -152,12 +152,8 @@ where
         );
         observer.on_object_relocated(&mut event)?;
         let (exports, mut lifecycle) = event.into_parts();
-        let exports = exports.unwrap_or_else(|| {
-            arc_unsize!(
-                Arc::new(self.default_exports()) => dyn SymbolExports<Arch::Layout>
-            )
-        });
-        self.exports.set(exports);
+        let exports = exports.unwrap_or_else(|| self.default_exports());
+        self.core.inner.exports.install_object(exports);
         let object_segments =
             ObjectSegmentView::new(self.core.segments(), self.init_segments.as_ref());
         self.section_segments.mprotect(&object_segments)?;
@@ -253,14 +249,16 @@ where
         Ok(())
     }
 
-    fn default_exports(&self) -> ObjectExports<Arch::Layout> {
-        let mut exports = ObjectExports::empty();
+    fn default_exports(&self) -> SymbolMap<Arch::Layout> {
+        // Objects have no GNU version table and satisfy requests by name.
+        let mut exports = SymbolMap::empty();
+        exports.ignore_versions();
+        let view = self.symtab.view();
         for (idx, symbol) in self.symtab.symbols().iter().enumerate() {
             if !symbol.is_exported() || self.symbol_uses_init_memory(symbol) {
                 continue;
             }
-            let entry = self.symtab.view().entry(idx);
-            exports.insert(entry.name(), symbol.clone());
+            insert_export(&mut exports, view.entry(idx).name(), symbol);
         }
         exports
     }
@@ -281,6 +279,18 @@ where
         let section_addr = VmAddr::new(self.sections.section(section_id).sh_addr());
         init_segments.contains_addr(section_addr)
     }
+}
+
+/// Keeps the first definition, except that a strong export replaces a weak one.
+fn insert_export<L: ElfLayout>(exports: &mut SymbolMap<L>, name: &[u8], symbol: &ElfSymbol<L>) {
+    if exports
+        .lookup(&mut SymbolLookup::new(name))
+        .is_some_and(|previous| !previous.is_weak() || symbol.is_weak())
+    {
+        return;
+    }
+    let name = SymbolName::try_from(name).expect("symbol name contains NUL");
+    exports.insert(SyntheticSymbol::from_elf(name, symbol, None));
 }
 
 #[cold]

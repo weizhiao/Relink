@@ -443,7 +443,7 @@ mod tests {
         arch::NativeArch,
         elf::ElfSymbol,
         image::{
-            Module, ModuleHandle, ModuleInstanceId, ModuleScope, ModuleState, SymbolExports,
+            ExportTable, Module, ModuleHandle, ModuleInstanceId, ModuleScope, ModuleState,
             SyntheticModule,
         },
         linker::{GraphModule, ModuleId},
@@ -470,7 +470,7 @@ mod tests {
             Module::<NativeArch>::name(&self.module)
         }
 
-        fn exports(&self) -> &dyn SymbolExports<<NativeArch as RelocationArch>::Layout> {
+        fn exports(&self) -> &ExportTable<<NativeArch as RelocationArch>::Layout> {
             Module::<NativeArch>::exports(&self.module)
         }
 

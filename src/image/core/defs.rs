@@ -1,15 +1,15 @@
 use crate::{
     Result, TlsError,
     arch::NativeArch,
-    elf::{ElfPhdr, ElfSymbol, ElfSymbolType, SymbolEntry},
+    elf::{ElfPhdr, ElfRelType, ElfSymbol, ElfSymbolType, SymbolEntry},
     image::{
-        DynamicInfo, GlobalScope, Module, ModuleHandle, ModuleSearch, ModuleState, PltRelocInfo,
-        SymbolExports, WeakLocalScope,
+        DynamicInfo, ExportTable, GlobalScope, Module, ModuleHandle, ModuleSearch, ModuleState,
+        WeakLocalScope,
     },
     input::ModulePath,
     lazy::{LazySetup, LazyValues},
     logging,
-    memory::{HostRegion, ImageMemory, RegionAccess, VmAddr, VmOffset},
+    memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr, VmOffset},
     observer::LifecycleHandlers,
     relocation::{LookupOrder, RelocationArch, SymbolRegistry, SymbolResolver},
     runtime::{CodeContext, CodeExecutor, Domain, DomainId},
@@ -17,7 +17,6 @@ use crate::{
     sync::{Arc, OnceCell, Weak},
     tls::{ImageTlsState, TLS_GET_ADDR_SYMBOL, TlsModule, TlsResolver},
 };
-use alloc::boxed::Box;
 use core::{marker::PhantomData, ops::Deref, ptr::NonNull};
 
 /// Stable runtime header shared by all [`ElfModule`] instantiations.
@@ -25,14 +24,14 @@ use core::{marker::PhantomData, ops::Deref, ptr::NonNull};
 pub(crate) struct CoreRuntime<Arch: RelocationArch = NativeArch> {
     core: OnceCell<VmAddr>,
     /// Immutable PLT metadata, independent of the selected binding mode.
-    plt: Option<PltRelocInfo<Arch>>,
+    plt: Option<MappedView<ElfRelType<Arch>>>,
     /// Lazy-binding values and state retained for the module lifetime.
     lazy: OnceCell<LazySetup>,
     module: for<'a> unsafe fn(&'a Self) -> &'a dyn CoreRuntimeModule<Arch>,
 }
 
 impl<Arch: RelocationArch> CoreRuntime<Arch> {
-    pub(crate) fn new<D, R, Tls>(plt: Option<PltRelocInfo<Arch>>) -> Self
+    pub(crate) fn new<D, R, Tls>(plt: Option<MappedView<ElfRelType<Arch>>>) -> Self
     where
         D: Send + Sync + 'static,
         R: RegionAccess,
@@ -40,7 +39,7 @@ impl<Arch: RelocationArch> CoreRuntime<Arch> {
     {
         Self {
             core: OnceCell::new(),
-            plt,
+            plt: plt.filter(|relocs| !relocs.is_empty()),
             lazy: OnceCell::new(),
             module: core_module::<D, Arch, R, Tls>,
         }
@@ -63,7 +62,7 @@ impl<Arch: RelocationArch> CoreRuntime<Arch> {
     }
 
     #[inline]
-    pub(crate) fn plt(&self) -> Option<&PltRelocInfo<Arch>> {
+    pub(crate) fn plt(&self) -> Option<&MappedView<ElfRelType<Arch>>> {
         self.plt.as_ref()
     }
 
@@ -86,9 +85,7 @@ impl<Arch: RelocationArch> CoreRuntime<Arch> {
     }
 }
 
-pub(crate) trait CoreRuntimeModule<Arch: RelocationArch>: Send + Sync {
-    fn memory(&self) -> &dyn ImageMemory;
-
+pub(crate) trait CoreRuntimeModule<Arch: RelocationArch>: Module<Arch> {
     fn lookup_symbol(&self, symbol: &SymbolEntry<'_, Arch::Layout>) -> Result<Option<VmAddr>>;
 }
 
@@ -127,11 +124,6 @@ where
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
 {
-    #[inline]
-    fn memory(&self) -> &dyn ImageMemory {
-        &self.segments
-    }
-
     fn lookup_symbol(&self, symbol: &SymbolEntry<'_, Arch::Layout>) -> Result<Option<VmAddr>> {
         if Tls::OVERRIDE_TLS_GET_ADDR && symbol.name() == TLS_GET_ADDR_SYMBOL {
             return Ok(Some(
@@ -158,7 +150,7 @@ where
         let symbols = lazy.symbols.as_ref().and_then(Weak::upgrade);
         let resolver = SymbolResolver::new(
             &source,
-            lookup,
+            &lookup,
             global_guard.as_deref(),
             symbols.as_deref(),
             symbolic,
@@ -190,8 +182,9 @@ pub struct ElfModule<
     Tls: TlsResolver<Arch> = (),
 > {
     /// Stable runtime state used by code paths that should not depend on this
-    /// struct's generic layout.
-    pub(crate) runtime: Box<CoreRuntime<Arch>>,
+    /// struct's generic layout. Its address becomes stable when the module is
+    /// placed in its Arc, before binding the owner or preparing lazy bindings.
+    pub(crate) runtime: CoreRuntime<Arch>,
 
     /// Lifecycle state shared by every handle for this module.
     pub(crate) state: ModuleState,
@@ -203,7 +196,7 @@ pub struct ElfModule<
     pub(crate) search: ModuleSearch,
 
     /// Runtime exports used for module symbol lookup.
-    pub(crate) exports: Arc<dyn SymbolExports<Arch::Layout>>,
+    pub(crate) exports: ExportTable<Arch::Layout>,
 
     /// Dynamic information
     pub(crate) dynamic_info: Option<Arc<DynamicInfo<Arch>>>,
@@ -375,8 +368,8 @@ where
     }
 
     #[inline]
-    fn exports(&self) -> &dyn SymbolExports<Arch::Layout> {
-        self.exports.as_ref()
+    fn exports(&self) -> &ExportTable<Arch::Layout> {
+        &self.exports
     }
 
     #[inline]

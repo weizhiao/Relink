@@ -4,8 +4,8 @@ use crate::{
     arch::NativeArch,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolTable},
     image::{
-        CoreRuntime, DynamicInfo, GlobalScope, LocalScope, Module, ModuleHandle, ModuleSearch,
-        ModuleState, PltRelocInfo, SymbolExports,
+        CoreRuntime, DynamicInfo, ExportTable, GlobalScope, LocalScope, Module, ModuleHandle,
+        ModuleSearch, ModuleState,
     },
     input::{ModulePath, ModuleSourceId},
     memory::{HostRegion, MappedView, RegionAccess, VmAddr},
@@ -15,7 +15,7 @@ use crate::{
     sync::{Arc, OnceCell, Weak, arc_downgrade_unsize, arc_unsize},
     tls::{ImageTlsState, TlsResolver},
 };
-use alloc::{boxed::Box, vec::Vec};
+use alloc::vec::Vec;
 use core::{fmt::Debug, ops::Deref, ptr::NonNull};
 
 /// A non-owning reference to an [`ElfCore`].
@@ -214,8 +214,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         user_data: D,
     ) -> Result<Self> {
         let dynamic = ElfDynamic::<Arch>::new(dynamic_entries, dynamic_addr, &segments)?;
-        let symtab = Arc::new(SymbolTable::from_dynamic(&dynamic, &segments)?);
-        let exports = symtab.clone();
+        let symtab = SymbolTable::from_dynamic(&dynamic, &segments)?;
         let needed_libs = dynamic
             .needed_libs
             .iter()
@@ -232,13 +231,12 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             .runpath_off
             .map(|runpath_off| symtab.strtab().get_cstr(runpath_off).to_bytes());
         let search = ModuleSearch::from_dynamic(path, soname, runpath, rpath);
-        let plt = PltRelocInfo::new(dynamic.pltrel, symtab);
         let inner = Arc::new(ElfModule {
-            runtime: Box::new(CoreRuntime::new::<D, R, Tls>(plt)),
+            runtime: CoreRuntime::new::<D, R, Tls>(dynamic.pltrel),
             search,
             state: ModuleState::initialized(source_id, domain.id()),
             lifecycle: OnceCell::new(),
-            exports: arc_unsize!(exports => dyn SymbolExports<Arch::Layout>),
+            exports: ExportTable::from_elf(symtab),
             dynamic_info: Some(Arc::new(DynamicInfo::<Arch> {
                 eh_frame_hdr,
                 phdrs: ElfPhdrs::Vec(phdrs),

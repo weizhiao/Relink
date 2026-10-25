@@ -4,23 +4,20 @@ use crate::{
         ElfHeader, ElfLayout, ElfSectionId, ElfSectionType, ElfShdr, NativeElfLayout,
         SymbolTableView,
     },
-    image::{ElfCore, RawObject, SymbolExports},
+    image::{ElfCore, RawObject, SymbolMap},
     input::{ElfReader, Path},
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr},
     object::{
-        CustomHash, ObjectExports, ObjectSections, ObjectSegmentView, ObjectSymbolTable,
+        ObjectSections, ObjectSegmentView, ObjectSymbolTable,
         layout::{SectionGroup, SectionPlacement},
     },
     relocation::{ObjectArch, RelocationArch},
-    sync::{Arc, arc_unsize},
     tls::TlsResolver,
 };
 use alloc::vec::Vec;
 use core::{ffi::CStr, ptr::NonNull};
 
 use super::lifecycle::{LifecycleHandlers, LifecycleRunner};
-
-type ObjectExportsHandle<L> = Option<Arc<dyn SymbolExports<L>>>;
 
 /// Relocatable-object layout event emitted before section addresses are assigned.
 pub struct SectionLayoutEvent<'event, L: ElfLayout = NativeElfLayout> {
@@ -116,8 +113,8 @@ where
 
 /// An object after relocation, before memory protection and initialization.
 ///
-/// Exposes section headers, memory, and symbols. Observers can install custom
-/// [`SymbolExports`]; otherwise the loader builds the default exports.
+/// Exposes section headers, memory, and symbols. Observers can supply a
+/// [`SymbolMap`]; otherwise the loader builds the default exports.
 pub struct ObjectRelocatedEvent<
     'event,
     D: Send + Sync + 'static,
@@ -129,7 +126,7 @@ pub struct ObjectRelocatedEvent<
     sections: &'event ObjectSections<Arch::Layout>,
     symtab: &'event ObjectSymbolTable<Arch::Layout>,
     memory: ObjectSegmentView<'event, R>,
-    exports: ObjectExportsHandle<Arch::Layout>,
+    exports: Option<SymbolMap<Arch::Layout>>,
     lifecycle: LifecycleHandlers,
 }
 
@@ -180,7 +177,7 @@ impl<
 
     /// Returns the relocated object symbol table view.
     #[inline]
-    pub fn symtab(&self) -> SymbolTableView<'event, Arch::Layout, CustomHash> {
+    pub fn symtab(&self) -> SymbolTableView<'event, Arch::Layout> {
         self.symtab.view()
     }
 
@@ -226,19 +223,16 @@ impl<
         self.memory.host_ptr_range(addr, len)
     }
 
-    /// Replaces runtime exports with a custom backend.
+    /// Replaces runtime exports with the supplied symbol table.
     #[inline]
-    pub fn set_exports<E>(&mut self, exports: E)
-    where
-        E: SymbolExports<Arch::Layout> + 'static,
-    {
-        self.exports = Some(arc_unsize!(Arc::new(exports) => dyn SymbolExports<Arch::Layout>));
+    pub fn set_exports(&mut self, exports: SymbolMap<Arch::Layout>) {
+        self.exports = Some(exports);
     }
 
     /// Clears all runtime exports.
     #[inline]
     pub fn clear_exports(&mut self) {
-        self.set_exports(ObjectExports::<Arch::Layout>::empty());
+        self.set_exports(SymbolMap::empty());
     }
 
     /// Returns mutable lifecycle setup for initialization and finalization.
@@ -248,7 +242,7 @@ impl<
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (ObjectExportsHandle<Arch::Layout>, LifecycleHandlers) {
+    pub(crate) fn into_parts(self) -> (Option<SymbolMap<Arch::Layout>>, LifecycleHandlers) {
         (self.exports, self.lifecycle)
     }
 }

@@ -98,23 +98,12 @@ region.mprotect(offset, len, prot)
 
 `HostRegion` 是最常见的 `RegionAccess` 实现：它背后是一段 host 进程可以直接访问的内存。
 
-它保存四个字段：
+它保存 host pointer、可见长度，以及控制和释放内存所需的信息。所有权决定了内存的释放方式：
 
-```rust,ignore
-host_ptr: *mut c_void,
-len: usize,
-control: M,
-unmap_on_drop: bool,
-```
-
-其中 `control` 是 mmap 后端，用来处理 `mprotect`、`madvise`、`munmap` 这类平台操作。
-
-最重要的是 `unmap_on_drop`。这决定了这块内存的生命周期是谁负责：
-
-- `MappedRegion::local(...)`：这个 region 拥有内存，drop 时会调用 `munmap`。
+- `MappedRegion::local(...)`：这个 region 拥有后端管理的映射，最后一个 clone 被 drop 时调用后端的 `munmap`。
 - `MappedRegion::local_alias(...)`：这个 region 只是借用/别名，drop 时不会释放内存。
 
-这两个名字很关键。比如 loader 自己通过 `create_space` 创建的整块空间应该是 `local`，因为它拥有生命周期。已经由内核或其他对象管理的内存则应该用 `local_alias`，避免错误释放。
+`AllocMmap` 按 `SpaceLayout.align` 和最小前缀 `offset % align` 分配内存。返回的 region 保存原始指针和 Rust `Layout`，最后一个 owner 被 drop 时直接调用 `dealloc`。它的裸 `Mmap::munmap(addr, len)` 返回错误，因为仅凭地址和长度无法确定原始分配布局。
 
 ### `MappedView`
 
@@ -178,8 +167,8 @@ MappedRegion / RegionAccess 执行读写
 `Mmap` 后端负责创建和填充地址空间。当前加载流程大致是：
 
 ```text
-1. create_space(...)
-   创建一整块拥有生命周期的 MappedRegion。
+1. create_space(layout, prot, init)
+   按 SpaceLayout 和 SpaceInit::Reserve、Zeroed 或 File 创建一整块拥有生命周期的 MappedRegion。
 
 2. map_file_at(...)
    如果输入来自文件，并且可以直接映射，就把文件页映射到 space 的子范围。
@@ -194,7 +183,11 @@ MappedRegion / RegionAccess 执行读写
    relocation 完成后，把段权限改成最终权限。
 ```
 
-注意：copy path 不需要额外的 `map_copy_at`。它依赖 `create_space(..., populate_later = false)` 返回一块可写、host-accessible 的空间，然后 loader 直接把 bytes 复制进去。这样内存加载路径更短，也避免每个 segment 多一次系统调用。
+注意：copy path 不需要额外的 `map_copy_at`。它用可写权限调用 `create_space(..., SpaceInit::Zeroed)`，然后直接把 bytes 复制到已清零、host-accessible 的空间中。这样内存加载路径更短，也避免每个 segment 多一次系统调用。`SpaceInit::File { fd, offset }` 则可以用私有文件映射初始化空间，权限由调用方的 `prot` 指定，不再固定为只读。
+
+`SpaceLayout { addr, len, align, offset }` 单独描述地址布局，与初始内容无关。`addr` 保留各后端原有的地址选择语义：原生后端将它作为地址提示，allocator 和 fixed 后端用它选择调用方提供的存储。后端返回长度为 `len` 的 region，其起始地址满足 `start % align == offset % align`。`len` 必须非零且为后端页大小的整数倍。`align` 必须是至少等于后端页大小的二次幂，`offset` 必须按页对齐。这里的 offset 用于地址对齐，文件位置则由 `SpaceInit::File` 单独指定。加载 program segments 时，loader 使用 `min_vaddr` 作为布局 offset，从而使加载基址 `image_start - min_vaddr` 满足 ELF 的对齐要求。超过一页的对齐由后端处理。
+
+初始文件映射可以直接提供第一个 program segment 的内容。空文件范围只影响首段复用：首段没有文件内容时改用普通空间预留，后续段的空文件范围仍由公共填充流程处理。段页面重叠时采用普通空间预留，保持原有映射顺序，段间空洞保持不可访问。所有文件映射段共用 BSS 处理：文件末页会一直清零到页边界，包括段内存末尾之后供解释器自举分配器使用的填充空间；需要时临时增加写权限，完成后恢复原权限；完整的 BSS 页采用匿名零页映射。
 
 ## unsafe 边界
 
@@ -221,8 +214,10 @@ MappedRegion / RegionAccess 执行读写
 
 需要重点保证：
 
-- `create_space(..., populate_later = false)` 返回可写、host-accessible 的空间。
-- `create_space(..., populate_later = true)` 可以先保留地址空间，之后由 `map_file_at` / `map_zero_at` 填充。
+- 所有初始化方式都遵守 `SpaceLayout`，包括超过后端页大小的对齐和非零的对齐 offset。
+- `create_space(..., SpaceInit::Zeroed)` 将整个范围清零并应用指定的 `prot`；copy path 会请求可写、host-accessible 的空间。
+- `create_space(..., SpaceInit::Reserve)` 可以先保留地址空间，之后由 `map_file_at` / `map_zero_at` 填充，再访问内容。
+- `create_space(..., SpaceInit::File { fd, offset })` 按指定的 `prot` 建立私有文件映射。不支持这种初始化方式的后端必须在没有副作用的情况下返回 `MmapError::FileMappingUnsupported`，loader 才能回退到 `Reserve`，再通过 `map_file_at` 填充各段。逐段文件映射与整块文件初始化是独立的能力；其他映射错误直接向上传递，不进行回退。
 - `munmap` 只释放由 `local` 拥有的空间。
 - `map_file_at` 和 `map_zero_at` 不需要返回 region，它们填的是已有 space。
 

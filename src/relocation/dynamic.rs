@@ -83,7 +83,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         let source = self.module_handle();
         let resolver = SymbolResolver::new(
             &source,
-            scope,
+            &scope,
             global_snapshot.as_ref(),
             symbols.as_deref(),
             self.symbolic(),
@@ -93,7 +93,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             &self,
             &resolver,
             BindingDeps::new(),
-            self.symtab().view(),
+            self.inner.exports.elf_symbols().view(),
             self.segments(),
             observer,
         );
@@ -105,7 +105,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         }
 
         let bindings = helper.into_bindings();
-        let scope = resolver.into_scope();
+        drop(resolver);
 
         let (init, fini) = self.resolve_lifecycle()?;
         let initializer = LifecycleRunner::new(init);
@@ -209,13 +209,11 @@ where
         }
 
         let mut bitmap = value >> 1;
-        let mut offset = next_offset;
         while bitmap != 0 {
-            if (bitmap & 1) != 0 {
-                update_relative_word(base + VmOffset::new(offset))?;
-            }
-            bitmap >>= 1;
-            offset = offset.wrapping_add(word_size);
+            let offset = next_offset
+                .wrapping_add((bitmap.trailing_zeros() as usize).wrapping_mul(word_size));
+            update_relative_word(base + VmOffset::new(offset))?;
+            bitmap &= bitmap - 1;
         }
         next_offset = next_offset.wrapping_add((<L::Relr as ElfWord>::BITS - 1) * word_size);
     }

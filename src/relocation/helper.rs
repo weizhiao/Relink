@@ -2,7 +2,7 @@
 use crate::memory::VmOffset;
 use crate::{
     Error, RelocReason, Result,
-    elf::{ElfRelEntry, ElfRelType, ElfSymbol, HashTable, SymbolEntry, SymbolTableView},
+    elf::{ElfRelEntry, ElfRelType, ElfSymbol, SymbolEntry, SymbolTableView},
     hint::unlikely,
     image::{ElfCore, ModuleInstanceId, ModuleState},
     memory::{ImageMemory, RegionAccess, VmAddr},
@@ -76,19 +76,18 @@ pub(crate) struct RelocHelper<
     R: RegionAccess,
     Tls: TlsResolver<Arch> + 'static,
     Obs: ?Sized,
-    H = HashTable<<Arch as RelocationArch>::Layout>,
     Memory = &'find ElfSegments<R>,
 > {
     pub(crate) core: &'find ElfCore<D, Arch, R, Tls>,
     resolver: &'find SymbolResolver<'find, Arch>,
     symbol_cache: Option<SymbolCache<'find, Arch>>,
     bindings: BindingDeps,
-    symbols: SymbolTableView<'find, Arch::Layout, H>,
+    symbols: SymbolTableView<'find, Arch::Layout>,
     memory: Memory,
     pub(crate) observer: &'find mut Obs,
 }
 
-impl<'find, D, Arch, R, Tls, Obs, H, Memory> RelocHelper<'find, D, Arch, R, Tls, Obs, H, Memory>
+impl<'find, D, Arch, R, Tls, Obs, Memory> RelocHelper<'find, D, Arch, R, Tls, Obs, Memory>
 where
     D: Send + Sync + 'static,
     Arch: RelocationArch,
@@ -101,7 +100,7 @@ where
         core: &'find ElfCore<D, Arch, R, Tls>,
         resolver: &'find SymbolResolver<'find, Arch>,
         bindings: BindingDeps,
-        symbols: SymbolTableView<'find, Arch::Layout, H>,
+        symbols: SymbolTableView<'find, Arch::Layout>,
         memory: Memory,
         observer: &'find mut Obs,
     ) -> Self {

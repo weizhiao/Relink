@@ -2,7 +2,7 @@ use crate::{
     IoError, MmapError, Result,
     input::{FileBacking, ModuleSourceId, Path},
     memory::{HostRegion, MappedRegion, VmAddr},
-    os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags},
+    os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags, SpaceInit, SpaceLayout},
 };
 use alloc::ffi::CString;
 use core::ffi::c_void;
@@ -38,6 +38,32 @@ impl DefaultMmap {
     #[inline]
     pub const fn new() -> Self {
         Self
+    }
+
+    #[inline]
+    pub(super) unsafe fn map(
+        &self,
+        addr: VmAddr,
+        len: usize,
+        prot: ProtFlags,
+        flags: MapFlags,
+        fd: isize,
+        offset: usize,
+    ) -> core::result::Result<VmAddr, u32> {
+        let ptr = unsafe {
+            mmap(
+                addr.as_mut_ptr(),
+                len,
+                prot.bits(),
+                flags.bits(),
+                fd as i32,
+                offset as _,
+            )
+        };
+        if core::ptr::eq(ptr, libc::MAP_FAILED) {
+            return Err(last_os_error_code());
+        }
+        Ok(VmAddr::from_ptr(ptr))
     }
 }
 
@@ -120,29 +146,11 @@ impl Mmap for DefaultMmap {
 
     unsafe fn create_space(
         &self,
-        addr: Option<VmAddr>,
-        len: usize,
+        layout: SpaceLayout,
         prot: ProtFlags,
-        _populate_later: bool,
+        init: SpaceInit,
     ) -> Result<MappedRegion<Self::Region>> {
-        let ptr = unsafe {
-            mmap(
-                addr.map_or(core::ptr::null_mut(), VmAddr::as_mut_ptr),
-                len,
-                prot.bits(),
-                (MapFlags::MAP_PRIVATE | MapFlags::MAP_ANONYMOUS).bits(),
-                -1,
-                0,
-            )
-        };
-        if core::ptr::eq(ptr, libc::MAP_FAILED) {
-            return Err(MmapError::MmapAnonymousFailed {
-                code: last_os_error_code(),
-            }
-            .into());
-        }
-        // SAFETY: the successful allocation above transfers ownership of this range.
-        Ok(unsafe { MappedRegion::local(ptr, len, *self) })
+        unsafe { super::create_space(self, layout, prot, init) }
     }
 
     unsafe fn alias_space(&self, addr: VmAddr, len: usize) -> Result<MappedRegion<Self::Region>> {
@@ -159,23 +167,9 @@ impl Mmap for DefaultMmap {
         offset: usize,
         fd: isize,
     ) -> Result<()> {
-        let ptr = unsafe {
-            mmap(
-                addr.as_mut_ptr(),
-                len,
-                prot.bits(),
-                flags.bits(),
-                fd as i32,
-                offset as _,
-            )
-        };
-        if core::ptr::eq(ptr, libc::MAP_FAILED) {
-            return Err(MmapError::MmapFailed {
-                code: last_os_error_code(),
-            }
-            .into());
-        }
-        Ok(())
+        unsafe { self.map(addr, len, prot, flags, fd, offset) }
+            .map(|_| ())
+            .map_err(|code| MmapError::MmapFailed { code }.into())
     }
 
     unsafe fn map_zero_at(
@@ -185,28 +179,14 @@ impl Mmap for DefaultMmap {
         prot: ProtFlags,
         flags: MapFlags,
     ) -> Result<()> {
-        let ptr = unsafe {
-            mmap(
-                addr.as_mut_ptr(),
-                len,
-                prot.bits(),
-                flags.union(MapFlags::MAP_ANONYMOUS).bits(),
-                -1,
-                0,
-            )
-        };
-        if core::ptr::eq(ptr, libc::MAP_FAILED) {
-            return Err(MmapError::MmapAnonymousFailed {
-                code: last_os_error_code(),
-            }
-            .into());
-        }
-        Ok(())
+        unsafe { self.map(addr, len, prot, flags | MapFlags::MAP_ANONYMOUS, -1, 0) }
+            .map(|_| ())
+            .map_err(|code| MmapError::MmapAnonymousFailed { code }.into())
     }
 
+    /// Releases an owned mapping or a page-aligned subrange of it.
     unsafe fn munmap(&self, addr: VmAddr, len: usize) -> Result<()> {
-        let res = unsafe { munmap(addr.as_mut_ptr(), len) };
-        if res != 0 {
+        if unsafe { munmap(addr.as_mut_ptr(), len) } != 0 {
             return Err(MmapError::MunmapFailed {
                 code: last_os_error_code(),
             }

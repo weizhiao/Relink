@@ -412,15 +412,12 @@ where
         let phdrs = phdrs.into();
         let page_size = self.loader.page_size()?.bytes();
         let layout = parse_segments(&phdrs, true, page_size)?;
-        let mapped_addr = load_bias + layout.min_vaddr;
+        let min_vaddr = VmOffset::new(layout.offset);
+        let mapped_addr = load_bias + min_vaddr;
         let segments = ElfSegments::new(
-            unsafe {
-                self.loader
-                    .mapper()
-                    .alias_space(mapped_addr, layout.mapped_len)?
-            },
+            unsafe { self.loader.mapper().alias_space(mapped_addr, layout.len)? },
             load_bias,
-            layout.min_vaddr,
+            min_vaddr,
         );
         let builder = ImageBuilder::<Tls, D, Arch, M::Region>::new(
             segments,

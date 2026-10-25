@@ -1,6 +1,6 @@
 use crate::input::{ElfReader, FileBacking};
 use crate::memory::{ImageMemory, RegionAccess, VmAddr, VmOffset, roundup};
-use crate::os::{MapFlags, Mmap};
+use crate::os::{MapFlags, Mmap, ProtFlags};
 use crate::{Result, logging};
 
 use super::{CopyRegion, ElfSegment, ElfSegments, SegmentContent};
@@ -82,8 +82,8 @@ impl ElfSegment {
         Ok(())
     }
 
-    /// Clears the partial data page and populates the remaining BSS pages.
-    fn fill_zero<M: Mmap + ?Sized>(
+    /// Clears the file-backed page tail and populates the remaining BSS pages.
+    pub(super) fn fill_zero<M: Mmap + ?Sized>(
         &self,
         mapper: &M,
         space: &ElfSegments<M::Region>,
@@ -97,7 +97,26 @@ impl ElfSegment {
                 .checked_offset_from(zero_start)
                 .expect("ELF zero-fill range overflowed")
                 .get();
-            space.zero_bytes(zero_start, write_len)?;
+            // Clear through the page boundary, including padding past p_memsz.
+            // ld.so's bootstrap allocator uses that padding as zeroed storage.
+            if write_len != 0 {
+                if self.prot.contains(ProtFlags::PROT_WRITE) {
+                    space.zero_bytes(zero_start, write_len)?;
+                } else {
+                    let page_start = zero_start.rounddown(self.page_size);
+                    space.mprotect(
+                        page_start,
+                        self.page_size,
+                        self.prot | ProtFlags::PROT_WRITE,
+                    )?;
+                    let cleared = space.zero_bytes(zero_start, write_len);
+                    // Restore the original permissions even if the region's
+                    // zeroing operation reports an error.
+                    let restored = space.mprotect(page_start, self.page_size, self.prot);
+                    cleared?;
+                    restored?;
+                }
+            }
 
             if write_len < zero_size {
                 unsafe {
@@ -116,7 +135,7 @@ impl ElfSegment {
 
 /// Populates a reserved image from immutable segment layouts.
 /// File-backed program segments use direct mappings; other inputs copy into
-/// writable, zero-initialized memory created with `populate_later = false`.
+/// writable memory created with [`crate::os::SpaceInit::Zeroed`].
 /// Callers retain control of subsequent protection changes.
 pub(crate) fn populate_segments<M: Mmap + ?Sized>(
     mapper: &M,

@@ -33,9 +33,9 @@ impl ObjectArch for X86_64Arch {
 
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
-    fn relocate<D, R, Tls, Obs, H, Memory>(
+    fn relocate<D, R, Tls, Obs, Memory>(
         _state: &mut Self::State,
-        helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, H, Memory>,
+        helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, Memory>,
         rel: &ElfRelType<Self>,
         target: &ElfShdr<<Self as RelocationArch>::Layout>,
         pltgot: &mut PltGotSection,

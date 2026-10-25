@@ -5,6 +5,7 @@
 
 mod core;
 mod elf;
+mod exports;
 mod module;
 mod scanned;
 mod search;
@@ -17,10 +18,10 @@ pub use crate::segment::{ElfSegments, MappedRange};
 pub(crate) use core::CoreRuntime;
 pub use core::{ElfCore, ElfCoreRef, ElfModule, LoadedCore, Symbol};
 pub(crate) use elf::DynamicInfo;
-pub(crate) use elf::PltRelocInfo;
 pub use elf::{LoadedElf, LoadedExec, RawDylib, RawDynamic, RawElf, RawExec, StaticExec};
 #[cfg(feature = "object")]
 pub use elf::{LoadedObject, RawObject};
+pub use exports::{ExportTable, SymbolMap, SymbolVersion, SyntheticSymbol};
 pub(crate) use module::WeakLocalScope;
 pub use module::{
     GlobalScope, LocalScope, ModuleHandle, ModuleInstanceId, ModuleScope, ModuleState,
@@ -30,5 +31,5 @@ pub use scanned::{ModuleCapability, ScannedDynamic, ScannedElf, ScannedExec, Sca
 pub use search::{ModuleSearch, PathTokens, SearchPathPool};
 pub(crate) use search::{SharedDir, default_module_search, library_path_components, normalize_dir};
 pub use symbol_name::SymbolName;
-pub use synthetic::{ResolveHook, SymbolVersion, SyntheticModule, SyntheticSymbol};
-pub use traits::{Module, SymbolExports};
+pub use synthetic::{ResolveHook, SyntheticModule};
+pub use traits::Module;
