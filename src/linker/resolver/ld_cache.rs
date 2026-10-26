@@ -5,7 +5,7 @@
 
 use crate::{
     IoError, ParseLdCacheError, Result,
-    input::{ElfFile, ElfReader, ElfReaderExt, Path, PathBuf},
+    input::{ElfFile, ElfReader, ElfReaderExt, Path},
     sync::Arc,
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -20,8 +20,13 @@ const OLD_ENTRY_SIZE: usize = 12;
 const NEW_ENTRY_SIZE: usize = 24;
 
 struct CacheEntry {
-    name: Box<[u8]>,
-    path: PathBuf,
+    name: Range<usize>,
+    path: Range<usize>,
+}
+
+struct CacheSnapshot {
+    bytes: Box<[u8]>,
+    entries: Box<[CacheEntry]>,
 }
 
 /// A shared snapshot of a glibc `ld.so.cache` file.
@@ -30,17 +35,17 @@ struct CacheEntry {
 /// bytes and preference order within each SONAME. Hardware-specific entries are
 /// excluded; this does not implement glibc's full search policy.
 ///
-/// Clones share the parsed index. Rebuild the snapshot to see file changes.
-/// Validate candidate files before loading them.
+/// Clones share the cache bytes and parsed index. Rebuild the snapshot to see
+/// file changes. Validate candidate files before loading them.
 #[derive(Clone)]
 pub struct LdCache {
-    entries: Arc<[CacheEntry]>,
+    snapshot: Arc<CacheSnapshot>,
 }
 
 impl fmt::Debug for LdCache {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LdCache")
-            .field("entries", &self.entries.len())
+            .field("entries", &self.snapshot.entries.len())
             .finish()
     }
 }
@@ -55,14 +60,28 @@ impl LdCache {
     /// Reads a cache file using the configured platform file backend.
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let file = ElfFile::from_path(path)?;
-        let bytes = file.read_to_vec::<u8>(0, file.len())?;
-        Self::parse(&bytes)
+        Self::from_bytes(file.read_to_vec::<u8>(0, file.len())?)
     }
 
     /// Parses a cache into an owned snapshot without accessing the filesystem.
     /// Old caches without a byte-order marker use the current target's byte order.
     /// Modern caches with a marker can be parsed in either byte order.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
+        Self::from_bytes(bytes)
+    }
+
+    fn from_bytes(bytes: impl AsRef<[u8]> + Into<Box<[u8]>>) -> Result<Self> {
+        // Validate before taking ownership or copying borrowed input.
+        let entries = Self::parse_entries(bytes.as_ref())?;
+        Ok(Self {
+            snapshot: Arc::new(CacheSnapshot {
+                bytes: bytes.into(),
+                entries: entries.into_boxed_slice(),
+            }),
+        })
+    }
+
+    fn parse_entries(bytes: &[u8]) -> Result<Vec<CacheEntry>> {
         let table = CacheTable::parse(bytes)?;
         let mut entries = Vec::new();
         entries
@@ -72,31 +91,28 @@ impl LdCache {
             // parse() has already checked the complete entry array's bounds.
             let offset = table.entries_start + index * table.entry_size;
             let flags = table.u32(offset)?;
-            let name = table.string(table.u32(offset + 4)?)?;
-            let path = table.string(table.u32(offset + 8)?)?;
-            if name.is_empty() || name.contains(&b'/') || !path.starts_with(b"/") {
+            let name = table.string_range_at(offset + 4)?;
+            let path = table.string_range_at(offset + 8)?;
+            if name.is_empty()
+                || bytes[name.clone()].contains(&b'/')
+                || !bytes[path.clone()].starts_with(b"/")
+            {
                 return Err(ParseLdCacheError::InvalidEntry.into());
             }
             // Keep generic ELF (1) and glibc (3), excluding libc4/libc5 entries.
             // The resolver validates the actual ELF header for its chosen Arch.
-            if !matches!(flags & 0xff, 1 | 3) {
+            if !matches!(flags & 0xff, 1 | 3)
+                || (table.entry_size == NEW_ENTRY_SIZE && table.u64(offset + 16)? != 0)
+            {
                 continue;
             }
-            if table.entry_size == NEW_ENTRY_SIZE && table.u64(offset + 16)? != 0 {
-                continue;
-            }
-            let path = Path::from_elf_bytes(path).ok_or(ParseLdCacheError::InvalidPath)?;
-            entries.push(CacheEntry {
-                name: name.into(),
-                path: path.into(),
-            });
+            Path::from_elf_bytes(&bytes[path.clone()]).ok_or(ParseLdCacheError::InvalidPath)?;
+            entries.push(CacheEntry { name, path });
         }
         // glibc uses a numeric SONAME comparator. An independent bytewise index
         // avoids relying on that ordering and on the input having been sorted.
-        entries.sort_by(|left, right| left.name.cmp(&right.name));
-        Ok(Self {
-            entries: entries.into(),
-        })
+        entries.sort_by_key(|entry| &bytes[entry.name.clone()]);
+        Ok(entries)
     }
 
     /// Returns generic cached file candidates in cache preference order.
@@ -106,12 +122,14 @@ impl LdCache {
     /// performs the normal target-specific ELF header checks on each candidate.
     pub fn candidates(&self, name: impl AsRef<[u8]>) -> impl Iterator<Item = &Path> {
         let name = name.as_ref();
-        let start = self
-            .entries
-            .partition_point(|entry| entry.name.as_ref() < name);
-        let remaining = &self.entries[start..];
-        let count = remaining.partition_point(|entry| entry.name.as_ref() == name);
-        remaining[..count].iter().map(|entry| entry.path.as_path())
+        let CacheSnapshot { bytes, entries } = self.snapshot.as_ref();
+        let start = entries.partition_point(|entry| &bytes[entry.name.clone()] < name);
+        let remaining = &entries[start..];
+        let count = remaining.partition_point(|entry| &bytes[entry.name.clone()] == name);
+        remaining[..count].iter().map(move |entry| {
+            Path::from_elf_bytes(&bytes[entry.path.clone()])
+                .expect("cached path was validated while parsing")
+        })
     }
 }
 
@@ -205,14 +223,15 @@ impl<'a> CacheTable<'a> {
         })
     }
 
-    fn string(&self, offset: u32) -> Result<&'a [u8]> {
+    fn string_range_at(&self, field_offset: usize) -> Result<Range<usize>> {
+        let offset = self.u32(field_offset)? as usize;
         let offset = self
             .string_offset_base
-            .checked_add(offset as usize)
+            .checked_add(offset)
             .filter(|offset| self.strings.contains(offset))
             .ok_or(ParseLdCacheError::InvalidStringOffset)?;
         CStr::from_bytes_until_nul(&self.bytes[offset..self.strings.end])
-            .map(CStr::to_bytes)
+            .map(|string| offset..offset + string.to_bytes().len())
             .map_err(|_| ParseLdCacheError::UnterminatedString.into())
     }
 }
@@ -226,11 +245,11 @@ fn checked_table_end(start: usize, count: usize, stride: usize, available: usize
 }
 
 fn read_bytes<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N]> {
-    let end = offset.checked_add(N).ok_or(ParseLdCacheError::Truncated)?;
     bytes
-        .get(offset..end)
+        .get(offset..)
+        .and_then(|tail| tail.first_chunk::<N>())
+        .copied()
         .ok_or_else(|| ParseLdCacheError::Truncated.into())
-        .map(|slice| slice.try_into().expect("checked fixed-size slice"))
 }
 
 fn read_u32(bytes: &[u8], offset: usize, little_endian: bool) -> Result<u32> {

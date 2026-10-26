@@ -17,6 +17,7 @@ use crate::{
     sync::{Arc, OnceCell, Weak},
     tls::{ImageTlsState, TLS_GET_ADDR_SYMBOL, TlsModule, TlsResolver},
 };
+use alloc::boxed::Box;
 use core::{marker::PhantomData, ops::Deref, ptr::NonNull};
 
 /// Stable runtime header shared by all [`ElfModule`] instantiations.
@@ -198,8 +199,8 @@ pub struct ElfModule<
     /// Runtime exports used for module symbol lookup.
     pub(crate) exports: ExportTable<Arch::Layout>,
 
-    /// Dynamic information
-    pub(crate) dynamic_info: Option<Arc<DynamicInfo<Arch>>>,
+    /// Dynamic metadata exclusively owned by this module.
+    pub(crate) dynamic_info: Option<Box<DynamicInfo<Arch>>>,
 
     /// Weak state used by lazy symbol lookup without retaining dependencies.
     pub(crate) lazy_lookup: OnceCell<LazyLookup<Arch>>,

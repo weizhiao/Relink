@@ -11,7 +11,7 @@ use crate::{
     sync::{Arc, AtomicU8, AtomicUsize, Ordering, Weak, arc_unsize},
 };
 use alloc::vec::Vec;
-use core::{fmt, ops::Deref};
+use core::{fmt, num::NonZeroUsize, ops::Deref};
 use spin::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 const UNINITIALIZED: u8 = 0;
@@ -23,13 +23,15 @@ const FINALIZED: u8 = 4;
 static NEXT_INSTANCE: AtomicUsize = AtomicUsize::new(1);
 
 #[inline]
-fn next_instance() -> usize {
+fn next_instance() -> NonZeroUsize {
     #[allow(deprecated)]
-    NEXT_INSTANCE
+    let instance = NEXT_INSTANCE
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
             value.checked_add(1)
         })
-        .expect("module instance identity space is exhausted")
+        .expect("module instance identity space is exhausted");
+    // The counter starts at one and checked increment never wraps through zero.
+    NonZeroUsize::new(instance).expect("module instance identity must be nonzero")
 }
 
 struct InitializationGuard<'a>(&'a AtomicU8);
@@ -82,7 +84,7 @@ struct ModuleEffects {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ModuleInstanceId {
     source: ModuleSourceId,
-    instance: usize,
+    instance: NonZeroUsize,
 }
 
 impl ModuleInstanceId {

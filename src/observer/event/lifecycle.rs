@@ -175,12 +175,17 @@ impl LifecycleRunner {
         Arch: RelocationArch,
         F: Fn(CodeContext<'_, Arch>, VmAddr) -> Result<()>,
     {
-        let mut event = LifecycleEvent::new(name, &self.lifecycle);
-        if let Some(hook) = self.hook.as_ref() {
+        // Only hooks need a private list of addresses they can modify.
+        let mut event;
+        let lifecycle = if let Some(hook) = self.hook.as_ref() {
+            event = LifecycleEvent::new(name, &self.lifecycle);
             hook.run(&mut event)?;
-        }
+            &event.lifecycle
+        } else {
+            &self.lifecycle
+        };
         let ctx = CodeContext::<Arch>::new(name, memory);
-        for addr in event.lifecycle.func_addrs() {
+        for addr in lifecycle.func_addrs() {
             call(ctx, addr)?;
         }
         Ok(())

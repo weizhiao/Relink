@@ -382,7 +382,7 @@ where
             search,
             exports: ExportTable::from_elf(symtab),
             user_data: self.user_data,
-            dynamic_info: Some(Arc::new(DynamicInfo::<Arch> {
+            dynamic_info: Some(Box::new(DynamicInfo::<Arch> {
                 eh_frame_hdr: self.eh_frame_hdr,
                 phdrs,
                 needed_libs: needed_libs.into_boxed_slice(),

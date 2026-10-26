@@ -15,7 +15,7 @@ use crate::{
     sync::{Arc, OnceCell, Weak, arc_downgrade_unsize, arc_unsize},
     tls::{ImageTlsState, TlsResolver},
 };
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 use core::{fmt::Debug, ops::Deref, ptr::NonNull};
 
 /// A non-owning reference to an [`ElfCore`].
@@ -237,7 +237,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             state: ModuleState::initialized(source_id, domain.id()),
             lifecycle: OnceCell::new(),
             exports: ExportTable::from_elf(symtab),
-            dynamic_info: Some(Arc::new(DynamicInfo::<Arch> {
+            dynamic_info: Some(Box::new(DynamicInfo::<Arch> {
                 eh_frame_hdr,
                 phdrs: ElfPhdrs::Vec(phdrs),
                 needed_libs,

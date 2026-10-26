@@ -513,18 +513,21 @@ where
         })
     }
 
-    pub(crate) fn remove_batch(
-        &mut self,
-        order: impl IntoIterator<Item = ModuleSlot>,
-    ) -> UnloadGroup<Meta, Arch> {
-        let order = order.into_iter();
-        let mut modules = Vec::with_capacity(order.size_hint().0);
-        for slot in order {
+    pub(crate) fn remove_batch(&mut self, order: Vec<ModuleSlot>) -> UnloadGroup<Meta, Arch> {
+        let mut modules = Vec::with_capacity(order.len());
+        for &slot in &order {
             let id = self.make_module_id(slot);
             let (module, retained, meta) = self.remove(slot);
             modules.push(UnloadedModule::new(id, module, retained, meta));
         }
         if !modules.is_empty() {
+            // Reuse the unload order if the empty free list would otherwise grow.
+            // Its traversal capacity stays available for later slot reuse.
+            if self.free_slots.is_empty() && self.free_slots.capacity() < order.len() {
+                self.free_slots = order;
+            } else {
+                self.free_slots.extend(order);
+            }
             self.prune_removed();
         }
         UnloadGroup::new(modules)
@@ -555,7 +558,6 @@ where
             .remove(&entry.module.source_id())
             .expect("committed module must have a source entry");
         assert_eq!(indexed, slot, "module source must refer to its slot");
-        self.free_slots.push(slot);
         (entry.module, entry.retained, entry.meta)
     }
 
