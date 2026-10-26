@@ -44,40 +44,36 @@ where
         None => None,
     };
     let layout = parse_segments(phdrs, is_dylib, page_size)?;
+    if is_dylib
+        && let Some(backing) = file_backing
+        && let Some(loaded) = map_file_segments(phdrs, mapper, &layout, backing, page_size)?
+    {
+        return Ok(loaded);
+    }
     let segments = phdrs
         .iter()
         .filter(|phdr| phdr.program_type() == ElfProgramType::LOAD)
         .map(|phdr| phdr.create_segment(page_size));
-    let mut remaining = segments.clone();
     let use_file = file_backing.is_some();
-    let loaded = if is_dylib
-        && let Some(backing) = file_backing
-        && let Some(loaded) = map_first_segment(phdrs, mapper, &layout, backing, page_size)?
-    {
-        // The initial file mapping already populated the first LOAD segment.
-        remaining.next();
-        loaded
+    let (prot, init) = if use_file {
+        (ProtFlags::PROT_NONE, SpaceInit::Reserve)
     } else {
-        let (prot, init) = if use_file {
-            (ProtFlags::PROT_NONE, SpaceInit::Reserve)
-        } else {
-            (ProtFlags::PROT_WRITE, SpaceInit::Zeroed)
-        };
-        let region = unsafe { mapper.create_space(layout, prot, init) }?;
-        let min_vaddr = VmOffset::new(layout.offset);
-        let base = region.addr() - min_vaddr;
-        ElfSegments::new(region, base, min_vaddr)
+        (ProtFlags::PROT_WRITE, SpaceInit::Zeroed)
     };
-    populate_segments(mapper, object, &loaded, remaining, file_backing)?;
+    let region = unsafe { mapper.create_space(layout, prot, init) }?;
+    let min_vaddr = VmOffset::new(layout.offset);
+    let base = region.addr() - min_vaddr;
+    let loaded = ElfSegments::new(region, base, min_vaddr);
+    populate_segments(mapper, object, &loaded, segments.clone(), file_backing)?;
     if !use_file {
         protect_segments(&loaded, segments)?;
     }
     Ok(loaded)
 }
 
-/// Creates the image's address space with a file mapping and completes its first
-/// LOAD segment. The caller populates the remaining segments through the common path.
-fn map_first_segment<M: Mmap + ?Sized>(
+/// Maps a complete image, reusing the initial file mapping for matching segment
+/// offsets when contiguous, nonempty file segments permit it.
+fn map_file_segments<M: Mmap + ?Sized>(
     phdrs: &[ElfPhdr<impl ElfLayout>],
     mapper: &M,
     layout: &SpaceLayout,
@@ -98,12 +94,14 @@ fn map_first_segment<M: Mmap + ?Sized>(
     let mut end = layout.offset;
     let mut last_start = end;
     let mut has_holes = false;
+    let mut reuse_contiguous = true;
     for phdr in loads.clone() {
         let start = rounddown(phdr.p_vaddr().get(), page_size);
         if start < end {
             return Ok(None);
         }
         has_holes |= start > end;
+        reuse_contiguous &= start == end && phdr.p_filesz() != 0;
         last_start = start;
         end = roundup(phdr.p_vaddr().get() + phdr.p_memsz(), page_size);
     }
@@ -113,14 +111,14 @@ fn map_first_segment<M: Mmap + ?Sized>(
         .offset
         .checked_add(initial_file_offset)
         .ok_or(crate::IoError::ReadBufferTooLarge)?;
-    let segment = first.create_segment(page_size);
+    let initial_prot = segment_prot(first.flags());
     // SAFETY: LOAD ranges were validated against the reader before this call.
     // No bytes are accessed until their file offset and permissions are fixed;
     // any full BSS pages are replaced with anonymous pages before publication.
     let region = match unsafe {
         mapper.create_space(
             *layout,
-            segment.prot,
+            initial_prot,
             SpaceInit::File {
                 fd: backing.fd,
                 offset,
@@ -134,25 +132,27 @@ fn map_first_segment<M: Mmap + ?Sized>(
     let min_vaddr = VmOffset::new(layout.offset);
     let base = region.addr() - min_vaddr;
     let loaded = ElfSegments::new(region, base, min_vaddr);
-    let SegmentContent::Contiguous {
-        file_size,
-        zero_size,
-        ..
-    } = &segment.content
-    else {
-        unreachable!("program segments have contiguous file contents");
-    };
     if has_holes {
         // Protect the whole middle range once. BSS population and later segment
         // mappings restore their own pages, leaving only the gaps inaccessible.
-        let file_end = segment.offset.get() + roundup(*file_size, page_size);
+        let file_end = roundup(first.p_vaddr().get() + first.p_filesz(), page_size);
         loaded.mprotect(
             base + VmOffset::new(file_end),
             last_start - file_end,
             ProtFlags::PROT_NONE,
         )?;
     }
-    segment.fill_zero(mapper, &loaded, *file_size, *zero_size)?;
+
+    for (index, phdr) in loads.enumerate() {
+        let segment = phdr.create_segment(page_size);
+        let relative = segment.offset.get() - layout.offset;
+        let mapped_prot = (index == 0
+            || (reuse_contiguous
+                && initial_file_offset.checked_add(relative)
+                    == Some(rounddown(phdr.p_offset(), page_size))))
+        .then_some(initial_prot);
+        segment.populate_file(mapper, &loaded, backing, mapped_prot)?;
+    }
     Ok(Some(loaded))
 }
 

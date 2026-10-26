@@ -19,6 +19,41 @@ impl ElfSegment {
             .expect("ELF segment offset overflowed")
     }
 
+    /// Populates one file-backed segment and its BSS.
+    /// `Some(prot)` means its file pages already contain the correct data with
+    /// that protection; it does not imply that the BSS is populated.
+    pub(super) fn populate_file<M: Mmap + ?Sized>(
+        &self,
+        mapper: &M,
+        space: &ElfSegments<M::Region>,
+        backing: FileBacking,
+        mapped_prot: Option<ProtFlags>,
+    ) -> Result<()> {
+        let SegmentContent::Contiguous {
+            file_offset,
+            file_size,
+            zero_size,
+        } = &self.content
+        else {
+            unreachable!("scattered segment content requires a writable copy space");
+        };
+        if let Some(prot) = mapped_prot {
+            if self.prot.bits() != prot.bits() {
+                space.mprotect(self.vm_addr(space.base()), self.len, self.prot)?;
+            }
+        } else {
+            self.map_file(mapper, space, backing, *file_offset, *file_size)?;
+        }
+        self.fill_zero(mapper, space, *file_size, *zero_size)?;
+        logging::trace!(
+            "[Mmap] address: {}, length: {}, flags: {:?}",
+            self.vm_addr(space.base()),
+            self.len,
+            self.prot
+        );
+        Ok(())
+    }
+
     /// Maps the contiguous file data of a program-header segment.
     fn map_file<M: Mmap + ?Sized>(
         &self,
@@ -83,7 +118,7 @@ impl ElfSegment {
     }
 
     /// Clears the file-backed page tail and populates the remaining BSS pages.
-    pub(super) fn fill_zero<M: Mmap + ?Sized>(
+    fn fill_zero<M: Mmap + ?Sized>(
         &self,
         mapper: &M,
         space: &ElfSegments<M::Region>,
@@ -146,23 +181,9 @@ pub(crate) fn populate_segments<M: Mmap + ?Sized>(
 ) -> Result<()> {
     if let Some(backing) = backing {
         for segment in segments {
-            let segment = segment.borrow();
-            let SegmentContent::Contiguous {
-                file_offset,
-                file_size,
-                zero_size,
-            } = &segment.content
-            else {
-                unreachable!("scattered segment content requires a writable copy space");
-            };
-            segment.map_file(mapper, space, backing, *file_offset, *file_size)?;
-            segment.fill_zero(mapper, space, *file_size, *zero_size)?;
-            logging::trace!(
-                "[Mmap] address: {}, length: {}, flags: {:?}",
-                segment.vm_addr(space.base()),
-                segment.len,
-                segment.prot
-            );
+            segment
+                .borrow()
+                .populate_file(mapper, space, backing, None)?;
         }
     } else {
         for segment in segments {
