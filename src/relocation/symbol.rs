@@ -93,9 +93,13 @@ impl BindingEffect {
 
 /// A symbol definition found during relocation.
 ///
-/// Contains the symbol information and the module where it was found.
-/// Used to compute the final address of a symbol.
+/// Local definitions are relative to the resolver's requesting module.
+/// Supply that same module when using the definition.
 pub enum SymDef<'lib, Arch: RelocationArch> {
+    /// An ordinary definition from the exact requesting module.
+    Local {
+        symbol: &'lib ElfSymbol<Arch::Layout>,
+    },
     Defined {
         symbol: &'lib ElfSymbol<Arch::Layout>,
         source: &'lib dyn Module<Arch>,
@@ -117,8 +121,12 @@ impl<'lib, Arch: RelocationArch> SymDef<'lib, Arch> {
     }
 
     #[inline]
-    pub(crate) fn definition(&self) -> Option<(&ElfSymbol<Arch::Layout>, &dyn Module<Arch>)> {
+    pub(crate) fn definition<'a>(
+        &'a self,
+        local: &'a dyn Module<Arch>,
+    ) -> Option<(&'a ElfSymbol<Arch::Layout>, &'a dyn Module<Arch>)> {
         match self {
+            Self::Local { symbol } => Some((symbol, local)),
             Self::Defined { symbol, source } => Some((symbol, *source)),
             Self::Unique { symbol, source } => Some((symbol, source.as_ref())),
             Self::WeakUndef => None,
@@ -126,10 +134,14 @@ impl<'lib, Arch: RelocationArch> SymDef<'lib, Arch> {
     }
 
     #[inline]
-    pub(crate) fn effect(&self) -> BindingEffect {
-        let provider = self
-            .definition()
-            .map(|(_, source)| source.state().instance_id());
+    pub(crate) fn effect<M: Module<Arch> + ?Sized>(&self, local: &M) -> BindingEffect {
+        let state = match self {
+            Self::Local { .. } => local.state(),
+            Self::Defined { source, .. } => source.state(),
+            Self::Unique { source, .. } => source.state(),
+            Self::WeakUndef => return BindingEffect::default(),
+        };
+        let provider = Some(state.instance_id());
         BindingEffect {
             provider,
             pin: if matches!(self, Self::Unique { .. }) {
@@ -146,11 +158,13 @@ impl<'lib, Arch: RelocationArch> SymDef<'lib, Arch> {
     }
 
     #[inline]
-    pub(crate) fn resolve(&self) -> Result<VmAddr> {
-        let Some((symbol, source)) = self.definition() else {
-            return Ok(VmAddr::null());
-        };
-        source.resolve_symbol(symbol)
+    pub(crate) fn resolve<M: Module<Arch> + ?Sized>(&self, local: &M) -> Result<VmAddr> {
+        match self {
+            Self::Local { symbol } => local.resolve_symbol(symbol),
+            Self::Defined { symbol, source } => source.resolve_symbol(symbol),
+            Self::Unique { symbol, source } => source.resolve_symbol(symbol),
+            Self::WeakUndef => Ok(VmAddr::null()),
+        }
     }
 }
 
@@ -196,6 +210,8 @@ where
                 .map(|module| LookupModule {
                     source: module,
                     exports: module.exports(),
+                    // Match both allocation and vtable: wrappers sharing state
+                    // may still override symbol resolution.
                     is_source: core::ptr::eq(module.as_ref(), source.as_ref()),
                 }),
         );
@@ -217,7 +233,10 @@ where
         &'find self,
         entry: &SymbolEntry<'find, Arch::Layout>,
         mut accept: impl FnMut(&ModuleHandle<Arch>) -> bool,
-    ) -> Option<(&'find ElfSymbol<Arch::Layout>, &'find ModuleHandle<Arch>)> {
+    ) -> Option<(
+        &'find ElfSymbol<Arch::Layout>,
+        &'find LookupModule<'lib, Arch>,
+    )> {
         let mut lookup = SymbolLookup::from_info(entry.info().clone());
         for module in &self.modules {
             if !accept(module.source) {
@@ -240,7 +259,7 @@ where
                     module.source.name().escape_ascii(),
                     entry.name().escape_ascii()
                 );
-                return Some((symbol, module.source));
+                return Some((symbol, module));
             }
         }
         None
@@ -251,9 +270,12 @@ where
         name: &[u8],
         symbol: &'find ElfSymbol<Arch::Layout>,
         source: &'find ModuleHandle<Arch>,
+        is_source: bool,
     ) -> SymDef<'find, Arch> {
         if unlikely(symbol.bind() == ElfSymbolBind::GNU_UNIQUE) {
             self.bind_unique(name, symbol, source)
+        } else if is_source {
+            SymDef::Local { symbol }
         } else {
             SymDef::defined(symbol, source.as_ref())
         }
@@ -284,11 +306,11 @@ where
     ) -> Option<SymDef<'find, Arch>> {
         let sym = entry.symbol();
         let binds_locally = unlikely(sym.binds_local()) || (self.symbolic && !sym.is_undef());
-        if !binds_locally && let Some((symbol, source)) = self.lookup_in_scope(entry, |_| true) {
-            return Some(self.bind(entry.name(), symbol, source));
+        if !binds_locally && let Some((symbol, module)) = self.lookup_in_scope(entry, |_| true) {
+            return Some(self.bind(entry.name(), symbol, module.source, module.is_source));
         }
         (!sym.is_undef())
-            .then(|| self.bind(entry.name(), sym, self.source))
+            .then(|| self.bind(entry.name(), sym, self.source, true))
             .or_else(|| Self::weak_undef(sym))
     }
 
@@ -299,20 +321,20 @@ where
         entry: &SymbolEntry<'find, Arch::Layout>,
     ) -> Option<(SymDef<'find, Arch>, BindingEffect)> {
         let source_id = self.source.source_id();
-        let (symbol, source) =
+        let (symbol, module) =
             self.lookup_in_scope(entry, |source| source.source_id() != source_id)?;
         let pin = if symbol.bind() != ElfSymbolBind::GNU_UNIQUE {
             None
         } else if let Some(registry) = &self.registry {
             registry
                 .resolve_unique(entry.name(), entry.symbol(), self.source)
-                .effect()
+                .effect(self.source.as_ref())
                 .pin()
         } else {
             Some(self.source.state().instance_id())
         };
-        let definition = SymDef::defined(symbol, &**source);
-        let mut effect = definition.effect();
+        let definition = SymDef::defined(symbol, module.source.as_ref());
+        let mut effect = definition.effect(self.source.as_ref());
         effect.pin = pin;
         Some((definition, effect))
     }
@@ -395,7 +417,11 @@ mod tests {
         ] {
             let resolver = SymbolResolver::new(&source, &local, Some(&global), None, false, order);
             assert_eq!(
-                resolver.find(&symbol(&source)).unwrap().resolve().unwrap(),
+                resolver
+                    .find(&symbol(&source))
+                    .unwrap()
+                    .resolve(source.as_ref())
+                    .unwrap(),
                 VmAddr::new(expected)
             );
         }
@@ -426,7 +452,7 @@ mod tests {
         let def = resolver
             .find(&symbol(&source))
             .expect("protected definition must resolve locally");
-        assert_eq!(def.resolve().unwrap(), VmAddr::new(0x100));
+        assert_eq!(def.resolve(source.as_ref()).unwrap(), VmAddr::new(0x100));
 
         let source = ModuleHandle::new(SyntheticModule::new(
             &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
@@ -459,7 +485,7 @@ mod tests {
         let def = resolver
             .find(&symbol(&source))
             .expect("lookup must continue past a hidden definition");
-        assert_eq!(def.resolve().unwrap(), VmAddr::new(0x300));
+        assert_eq!(def.resolve(source.as_ref()).unwrap(), VmAddr::new(0x300));
 
         let hidden_ref = ModuleHandle::new(SyntheticModule::new(
             &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
@@ -534,10 +560,20 @@ mod tests {
             LookupOrder::GlobalFirst,
         );
         let definition = first.find(&symbol(&source)).unwrap();
-        assert_eq!(definition.resolve().unwrap(), VmAddr::new(0x100));
         assert_eq!(
-            definition.effect().pin(),
-            Some(definition.definition().unwrap().1.state().instance_id())
+            definition.resolve(source.as_ref()).unwrap(),
+            VmAddr::new(0x100)
+        );
+        assert_eq!(
+            definition.effect(source.as_ref()).pin(),
+            Some(
+                definition
+                    .definition(source.as_ref())
+                    .unwrap()
+                    .1
+                    .state()
+                    .instance_id()
+            )
         );
 
         let second_scope = scope([unique("second", 0x200)]);
@@ -550,7 +586,11 @@ mod tests {
             LookupOrder::GlobalFirst,
         );
         assert_eq!(
-            second.find(&symbol(&source)).unwrap().resolve().unwrap(),
+            second
+                .find(&symbol(&source))
+                .unwrap()
+                .resolve(source.as_ref())
+                .unwrap(),
             VmAddr::new(0x100)
         );
 
@@ -565,7 +605,11 @@ mod tests {
             LookupOrder::GlobalFirst,
         );
         assert_eq!(
-            other.find(&symbol(&source)).unwrap().resolve().unwrap(),
+            other
+                .find(&symbol(&source))
+                .unwrap()
+                .resolve(source.as_ref())
+                .unwrap(),
             VmAddr::new(0x300)
         );
     }

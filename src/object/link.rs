@@ -15,7 +15,7 @@ use crate::{
     observer::{LifecycleRunner, ObjectRelocatedEvent, RelocationObserver, SymbolBindingEvent},
     relocate_context_error,
     relocation::{
-        BindingDeps, ObjectArch, RelocHelper, RelocateArgs, RelocationArch, SymDef, SymbolResolver,
+        BindingDeps, ObjectArch, RelocHelper, RelocateArgs, RelocationArch, SymbolResolver,
     },
     runtime::CodeContext,
     tls::TlsResolver,
@@ -219,8 +219,14 @@ where
                 let addr = if symbol.is_undef() {
                     let entry = symtab.view().entry(idx);
                     let definition = resolver.find(&entry);
-                    let effect = definition.as_ref().map(SymDef::effect).unwrap_or_default();
-                    let resolved = definition.as_ref().map(SymDef::resolve).transpose()?;
+                    let effect = definition
+                        .as_ref()
+                        .map(|definition| definition.effect(&**core))
+                        .unwrap_or_default();
+                    let resolved = definition
+                        .as_ref()
+                        .map(|definition| definition.resolve(&**core))
+                        .transpose()?;
                     let mut event =
                         SymbolBindingEvent::new(core, None, symbol, entry.name(), resolved);
                     observer.on_symbol_binding(&mut event)?;

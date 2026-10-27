@@ -43,9 +43,9 @@ where
         if symdef.is_weak_undef() {
             Ok(TlsSymbol::UndefinedWeak)
         } else {
-            let effect = symdef.effect();
+            let effect = symdef.effect(&**self.core);
             let (symbol, source) = symdef
-                .definition()
+                .definition(&**self.core)
                 .expect("defined TLS symbol must retain its provider");
             let Some(module) = source.tls() else {
                 return Err(RelocReason::MissingTlsModuleId);

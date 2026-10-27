@@ -160,13 +160,13 @@ where
         let Some(symdef) = resolver.find(symbol) else {
             return Ok(None);
         };
-        let effect = symdef.effect();
+        let effect = symdef.effect(source.as_ref());
         let pin = effect.pin();
         source.state().install_effects(effect.provider, pin);
         if let (Some(symbols), Some(pin)) = (symbols.as_ref(), pin) {
             symbols.queue_pin(pin);
         }
-        symdef.resolve().map(Some)
+        symdef.resolve(source.as_ref()).map(Some)
     }
 }
 

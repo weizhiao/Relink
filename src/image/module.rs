@@ -11,7 +11,12 @@ use crate::{
     sync::{Arc, AtomicU8, AtomicUsize, Ordering, Weak, arc_unsize},
 };
 use alloc::vec::Vec;
-use core::{fmt, num::NonZeroUsize, ops::Deref};
+use core::{
+    fmt,
+    hash::{Hash, Hasher},
+    num::NonZeroUsize,
+    ops::Deref,
+};
 use spin::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 const UNINITIALIZED: u8 = 0;
@@ -81,10 +86,27 @@ struct ModuleEffects {
 ///
 /// Unlike [`ModuleSourceId`], this value changes when the same source is
 /// unloaded and loaded again.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialOrd, Ord)]
 pub struct ModuleInstanceId {
     source: ModuleSourceId,
     instance: NonZeroUsize,
+}
+
+impl PartialEq for ModuleInstanceId {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        // The checked counter never reuses an instance number, even across sources or domains.
+        self.instance == other.instance
+    }
+}
+
+impl Hash for ModuleInstanceId {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Preserve source-first hashing; equal instances always have the same source.
+        self.source.hash(state);
+        self.instance.hash(state);
+    }
 }
 
 impl ModuleInstanceId {
@@ -396,10 +418,7 @@ impl<Arch: RelocationArch> Deref for ModuleScope<Arch> {
 impl<Arch: RelocationArch> ModuleScope<Arch> {
     /// Creates an empty scope bound to a fixed runtime domain.
     pub fn new(domain: DomainId) -> Self {
-        Self {
-            modules: Arc::new(Vec::new()),
-            domain,
-        }
+        Self::from_admitted(domain, Vec::new())
     }
 
     /// Returns the complete runtime domain identity.
@@ -414,6 +433,14 @@ impl<Arch: RelocationArch> ModuleScope<Arch> {
 
     fn check_module(&self, module: &ModuleHandle<Arch>) -> Result<()> {
         self.domain.ensure(module.domain_id())
+    }
+
+    // Only context/session records that have already passed admission use this.
+    pub(crate) fn from_admitted(domain: DomainId, modules: Vec<ModuleHandle<Arch>>) -> Self {
+        Self {
+            modules: Arc::new(modules),
+            domain,
+        }
     }
 
     // Only context/session records that have already passed admission use this.

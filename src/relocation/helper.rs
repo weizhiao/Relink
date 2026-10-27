@@ -263,8 +263,14 @@ where
         let (resolved, effect) = match &cached.definition {
             CachedDefinition::TlsEntry(addr) => (Some(*addr), BindingEffect::default()),
             CachedDefinition::Symbol(definition) => {
-                let effect = definition.as_ref().map(SymDef::effect).unwrap_or_default();
-                let resolved = definition.as_ref().map(SymDef::resolve).transpose()?;
+                let effect = definition
+                    .as_ref()
+                    .map(|definition| definition.effect(&**self.core))
+                    .unwrap_or_default();
+                let resolved = definition
+                    .as_ref()
+                    .map(|definition| definition.resolve(&**self.core))
+                    .transpose()?;
                 (resolved, effect)
             }
         };

@@ -407,7 +407,7 @@ where
             return Ok(scope.clone());
         }
 
-        let mut scope = ModuleScope::new(self.domain.id());
+        let mut scope = Vec::new();
         let mut visited = EntitySet::default();
         let mut queue = VecDeque::new();
         visited.insert(root_slot);
@@ -419,7 +419,7 @@ where
                 .module(slot)
                 .expect("load group traversal must only contain committed modules");
 
-            scope.push_admitted(module.handle().clone());
+            scope.push(module.handle().clone());
             for &dep in module.direct_deps() {
                 if visited.insert(dep) {
                     queue.push_back(dep);
@@ -427,6 +427,7 @@ where
             }
         }
 
+        let scope = ModuleScope::from_admitted(self.domain.id(), scope);
         self.committed
             .module_mut(root_slot)
             .expect("validated module id must refer to committed state")

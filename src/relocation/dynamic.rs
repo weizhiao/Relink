@@ -373,7 +373,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
                 let symbol = helper.symbol_entry(rel);
                 let len = symbol.symbol().st_size();
                 if let Some((symdef, effect)) = helper.find_copy_symdef(&symbol)
-                    && let Some((symbol, source)) = symdef.definition()
+                    && let Some((symbol, source)) = symdef.definition(&**helper.core)
                 {
                     let mut src = vec![0; len];
                     source

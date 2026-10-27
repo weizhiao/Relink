@@ -394,7 +394,7 @@ where
         &self,
         context: &LinkContext<Meta, Arch, Tls>,
     ) -> ModuleScope<Arch> {
-        let mut scope = ModuleScope::new(context.domain_id());
+        let mut scope = Vec::with_capacity(self.group_order.len());
         for index in 0..self.group_order.len() {
             let id = self.group_order[index];
             let module = if let Some(raw) = self.dynamics.get(&id).map(GraphEntry::payload) {
@@ -408,9 +408,9 @@ where
                     .map(|module| module.handle().clone())
                     .expect("scope slot must resolve to a committed module")
             };
-            scope.push_admitted(module);
+            scope.push(module);
         }
-        scope
+        ModuleScope::from_admitted(context.domain_id(), scope)
     }
 }
 
@@ -492,7 +492,7 @@ where
                         .collect::<BTreeMap<_, _>>()
                 });
 
-                let mut scope = ModuleScope::new(local.domain_id());
+                let mut scope = Vec::new();
                 let mut visited = EntitySet::default();
                 let mut pending = VecDeque::from([module]);
                 while let Some(slot) = pending.pop_front() {
@@ -503,14 +503,14 @@ where
                         .get(&slot)
                         .copied()
                         .expect("module dependency must belong to the resolved load group");
-                    scope.push_admitted(local[index].clone());
+                    scope.push(local[index].clone());
                     let direct_deps = self
                         .resolve
                         .direct_deps(slot)
                         .expect("resolved module must retain its direct dependencies");
                     pending.extend(direct_deps.iter().copied());
                 }
-                scope
+                ModuleScope::from_admitted(local.domain_id(), scope)
             })
             .collect()
     }
