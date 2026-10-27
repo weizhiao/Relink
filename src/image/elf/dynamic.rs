@@ -375,8 +375,8 @@ where
         if dynamic.nodelete {
             state.pin_self();
         }
-        let inner = ElfModule {
-            runtime: CoreRuntime::new::<D, R, Tls>(dynamic.pltrel.clone()),
+        let inner = Arc::new_cyclic(|owner| ElfModule {
+            runtime: CoreRuntime::new(owner, dynamic.pltrel.clone()),
             state,
             lifecycle: OnceCell::new(),
             search,
@@ -392,9 +392,7 @@ where
             tls,
             domain: self.domain,
             segments: self.segments,
-        };
-        let inner = Arc::new(inner);
-        ElfModule::bind_runtime_owner(&inner);
+        });
 
         Ok(RawDynamic {
             entry: self.entry,

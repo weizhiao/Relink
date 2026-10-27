@@ -80,8 +80,8 @@ where
 {
     pub(crate) fn build_object(self) -> RawObject<D, Arch, R, Tls> {
         let (segments, init_segments) = self.segments.into_parts();
-        let inner = ElfModule {
-            runtime: CoreRuntime::new::<D, R, Tls>(None),
+        let inner = Arc::new_cyclic(|owner| ElfModule {
+            runtime: CoreRuntime::new(owner, None),
             state: ModuleState::new(self.source_id, self.domain.id()),
             lifecycle: OnceCell::new(),
             search: ModuleSearch::from_dynamic(self.path, None, None, None),
@@ -92,9 +92,7 @@ where
             tls: ImageTlsState::empty(),
             domain: self.domain,
             segments,
-        };
-        let inner = Arc::new(inner);
-        ElfModule::bind_runtime_owner(&inner);
+        });
 
         RawObject {
             core: ElfCore { inner },

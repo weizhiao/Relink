@@ -231,8 +231,8 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             .runpath_off
             .map(|runpath_off| symtab.strtab().get_cstr(runpath_off).to_bytes());
         let search = ModuleSearch::from_dynamic(path, soname, runpath, rpath);
-        let inner = Arc::new(ElfModule {
-            runtime: CoreRuntime::new::<D, R, Tls>(dynamic.pltrel),
+        let inner = Arc::new_cyclic(|owner| ElfModule {
+            runtime: CoreRuntime::new(owner, dynamic.pltrel),
             search,
             state: ModuleState::initialized(source_id, domain.id()),
             lifecycle: OnceCell::new(),
@@ -249,7 +249,6 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             segments,
             user_data,
         });
-        ElfModule::bind_runtime_owner(&inner);
         Ok(Self { inner })
     }
 }

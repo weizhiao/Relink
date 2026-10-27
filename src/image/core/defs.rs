@@ -14,7 +14,7 @@ use crate::{
     relocation::{LookupOrder, RelocationArch, SymbolRegistry, SymbolResolver},
     runtime::{CodeContext, CodeExecutor, Domain, DomainId},
     segment::{ElfSegments, MappedRange},
-    sync::{Arc, OnceCell, Weak},
+    sync::{OnceCell, Weak},
     tls::{ImageTlsState, TLS_GET_ADDR_SYMBOL, TlsModule, TlsResolver},
 };
 use alloc::boxed::Box;
@@ -23,7 +23,8 @@ use core::{marker::PhantomData, ops::Deref, ptr::NonNull};
 /// Stable runtime header shared by all [`ElfModule`] instantiations.
 #[repr(C)]
 pub(crate) struct CoreRuntime<Arch: RelocationArch = NativeArch> {
-    core: OnceCell<VmAddr>,
+    /// Address of the enclosing module's allocation, fixed during construction.
+    core: VmAddr,
     /// Immutable PLT metadata, independent of the selected binding mode.
     plt: Option<MappedView<ElfRelType<Arch>>>,
     /// Lazy-binding values and state retained for the module lifetime.
@@ -32,34 +33,24 @@ pub(crate) struct CoreRuntime<Arch: RelocationArch = NativeArch> {
 }
 
 impl<Arch: RelocationArch> CoreRuntime<Arch> {
-    pub(crate) fn new<D, R, Tls>(plt: Option<MappedView<ElfRelType<Arch>>>) -> Self
+    /// Creates the header inside its owner's `Arc::new_cyclic` closure.
+    /// Store it in that owner and only access it after construction completes.
+    pub(crate) fn new<D, R, Tls>(
+        owner: &Weak<ElfModule<D, Arch, R, Tls>>,
+        plt: Option<MappedView<ElfRelType<Arch>>>,
+    ) -> Self
     where
         D: Send + Sync + 'static,
         R: RegionAccess,
         Tls: TlsResolver<Arch>,
     {
         Self {
-            core: OnceCell::new(),
+            // Keep only the address so a unique module can still use Arc::get_mut.
+            core: VmAddr::from_ptr(owner.as_ptr()),
             plt: plt.filter(|relocs| !relocs.is_empty()),
             lazy: OnceCell::new(),
             module: core_module::<D, Arch, R, Tls>,
         }
-    }
-
-    #[inline]
-    fn bind_core(&self, core: VmAddr) {
-        assert!(
-            self.core.set(core).is_ok(),
-            "core runtime owner must be installed only once",
-        );
-    }
-
-    #[inline]
-    fn core(&self) -> VmAddr {
-        *self
-            .core
-            .get()
-            .expect("core runtime owner must be installed before use")
     }
 
     #[inline]
@@ -105,7 +96,9 @@ where
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
 {
-    unsafe { &*runtime.core().as_ptr::<ElfModule<D, Arch, R, Tls>>() }
+    // SAFETY: The runtime is embedded in the initialized module whose address
+    // and concrete type were captured together during Arc::new_cyclic.
+    unsafe { &*runtime.core.as_ptr::<ElfModule<D, Arch, R, Tls>>() }
 }
 
 unsafe fn core_module<D, Arch, R, Tls>(runtime: &CoreRuntime<Arch>) -> &dyn CoreRuntimeModule<Arch>
@@ -183,8 +176,8 @@ pub struct ElfModule<
     Tls: TlsResolver<Arch> = (),
 > {
     /// Stable runtime state used by code paths that should not depend on this
-    /// struct's generic layout. Its address becomes stable when the module is
-    /// placed in its Arc, before binding the owner or preparing lazy bindings.
+    /// struct's generic layout. Arc::new_cyclic records the module's final address
+    /// during construction, before the runtime is used or lazy bindings are prepared.
     pub(crate) runtime: CoreRuntime<Arch>,
 
     /// Lifecycle state shared by every handle for this module.
@@ -332,13 +325,6 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     #[inline]
     pub(crate) fn executor(&self) -> &dyn CodeExecutor<Arch> {
         self.domain.executor()
-    }
-
-    #[inline]
-    pub(crate) fn bind_runtime_owner(inner: &Arc<Self>) {
-        inner
-            .runtime
-            .bind_core(VmAddr::from_ptr(Arc::as_ptr(inner)));
     }
 
     #[cold]
