@@ -1,7 +1,8 @@
 # Relink: Rust ELF Loader and Runtime Linker
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/weizhiao/Relink/main/docs/assets/logo.svg" width="560" alt="Relink logo">
+  <img src="docs/assets/logo-dark.svg#gh-dark-mode-only" width="500" alt="Relink">
+  <img src="docs/assets/logo.svg#gh-light-mode-only" width="500" alt="Relink">
 </p>
 
 <p align="center">
@@ -14,125 +15,89 @@
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> | <a href="README_zh.md">简体中文</a> |
-  <a href="CONTRIBUTING.md">Contributing</a> | <a href="CONTRIBUTING_zh.md">贡献指南</a>
+  <a href="README.md">English</a> | <a href="README_zh.md">简体中文</a>
 </p>
 
 <p align="center">
-  <strong>Load, link, and rewrite ELF in no_std environments.</strong>
+  <strong>Fast · Customizable · no_std support</strong>
 </p>
 
-Relink is a highly customizable, high-performance Rust ELF loading and runtime linking library. It can load `.so` files, executables, and object files from disk or memory, then resolve dependencies, apply relocations, and look up symbols. It also exposes observer hooks for load, relocation, symbol binding, and lifecycle events.
+Relink is a Rust ELF loader and runtime linker for plugins, JITs, and custom runtimes. Take control of dependency resolution, symbol binding, memory layout, and the loading lifecycle.
 
-## When To Use It
+[Quick start](#quick-start) · [Performance](#benchmarks) · [Platforms](#platform-support) · [Examples](examples/README.md) · [API docs](https://docs.rs/elf_loader)
 
-- Load plugins, JIT artifacts, or hot-reload modules at runtime.
-- Control `DT_NEEDED` dependencies, symbol scopes, or relocation handling yourself.
-- Track or customize load, relocation, symbol binding, and init/fini flow through observer hooks.
-- Load ELF from memory, or plug in your own mmap or memory-management backend.
-- Scan dependencies and sections first, then reorder layout, pack hot code, use huge pages, or run custom handling.
-- Load relocatable ELF files such as `.o` / `.ko`.
-- Keep ELF loading available in `no_std`, kernels, embedded systems, or non-standard runtimes.
+## Highlights
 
-## What It Loads
+- **Flexible inputs:** load shared libraries, executables, and relocatable objects (`.o` / `.ko`) from files or memory.
+- **Control over linking:** customize dependency resolution, symbol scopes, and relocation; observe or intervene in loading through observers.
+- **Optimize before loading:** scan before mapping, reorder sections, and group hot code. See [platform support](#platform-support) for architecture coverage.
+- **Fit your runtime:** `no_std` support with replaceable mmap and memory-access backends for kernels, embedded systems, or remote memory.
 
-- Shared objects / dynamic libraries (`ET_DYN`)
-- Executables and PIE-style images (`ET_EXEC`, plus executable-style `ET_DYN`)
-- Relocatable object files (`ET_REL`, for example `.o` / `.ko`)
+## Benchmarks
 
-## Compared With `dlopen`
+Across the 10 system libraries in this run, Relink used **4–32% less load time** and
+**about one-third the symbol-hit time** compared with `libloading` 0.9.0 (glibc).
+Figures show means and 95% confidence intervals; lower is better.
 
-| Capability | Relink | `dlopen`-style loading |
-| --- | --- | --- |
-| In-memory loading | ✅ Load from paths, byte buffers, or already parsed ELF inputs | ❌ |
-| `ET_REL` loading | ✅ Load and relocate `.o` / `.ko` / `ET_REL` files | ❌ |
-| Pre-link planning | ✅ Resolve dependencies and sections first, then decide how to map | ❌ |
-| Section reordering | ✅ On `x86_64`, adjust section layout before mapping for hot-code packing or custom reordering | ❌ |
-| Mapping policy | ✅ Replace mmap, page size, permissions, and memory-access backends | ❌ |
-| Dependency and symbol policy | ✅ Customize `DT_NEEDED` resolution, symbol scopes, and relocation interception | ❌ |
-| Observer events | ✅ Hook load, symbol binding, relocation, and related stages | ❌ |
-| Context isolation | ✅ Multiple `LinkContext`s keep independent modules, dependency graphs, and symbol scopes | ❌ |
-| Remote / heterogeneous loading | ✅ Use custom memory access to load remote devices or heterogeneous target ELFs locally | ❌ |
+**Load & teardown · µs**
+
+![Relink and libloading load and teardown times](benches/figures/load-teardown-dark.svg#gh-dark-mode-only)
+![Relink and libloading load and teardown times](benches/figures/load-teardown.svg#gh-light-mode-only)
+
+Teardown times are similar overall. Context creation/destruction and host imports are outside timing.
+
+**Symbol lookup · ns**
+
+![Relink and libloading symbol lookup hit and miss times](benches/figures/symbol-lookup-dark.svg#gh-dark-mode-only)
+![Relink and libloading symbol lookup hit and miss times](benches/figures/symbol-lookup.svg#gh-light-mode-only)
+
+Symbol lookup compares public APIs: Relink searches root exports, while `dlsym` may also
+search dependencies. Misses include each API's error handling.
+
+| Configuration | Value |
+| --- | --- |
+| Date / commit | 2026-10-29 · `ed37e60` |
+| Environment | Ryzen 9 7945HX · Linux 7.0.11-arch1-1 x86_64 · glibc 2.43 · Rust 1.96.0 |
+| Sampling | Pinned to CPU 2; 1 s warmup, 2 s measurement, 30 samples per case; warm file cache |
+
+Reproduce with `taskset -c 2 bash ci/bench.sh`. See the [benchmark guide](benches/README.md)
+for dependencies and measurement scope.
 
 ## Quick Start
-
-The default feature set is `full`. It includes the libc backend, relocatable-object loading,
-and the built-in native lazy binder:
 
 ```toml
 [dependencies]
 elf_loader = "0.18.0"
 ```
 
-For a smaller build, disable default features and opt in only to what you need:
-
-```toml
-[dependencies]
-elf_loader = { version = "0.18.0", default-features = false, features = ["libc"] }
-```
-
-### Use Linker to Load Dependencies
+Load a shared library, call a function, then release its modules. First
+[build the example library](examples/README.md#build-the-example-library), then run
+from the repository root. You can also run `cargo run --example linker_load` directly.
 
 ```rust
-use elf_loader::{
-    LinkContext, Linker, Result,
-    input::PathBuf,
-    linker::{LdCache, SearchConfig, SearchPathResolver},
-};
+use elf_loader::{LinkContext, Linker, input::PathBuf, linker::SearchPathResolver};
+use std::ffi::c_int;
 
-const LINKER: Linker = Linker::new();
-
-fn main() -> Result<()> {
-    let root = PathBuf::from("path/to/plugin.so");
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut context = LinkContext::for_process();
-    // Supply paths appropriate for your target system.
-    let config = SearchConfig::new()
-        .library_path("$ORIGIN/plugins:/opt/app/lib", "/opt/app/bin")
-        .cache(LdCache::load_system()?)
-        .default_dirs(["/lib", "/usr/lib"]);
-    let resolver = SearchPathResolver::with_config(config);
-
-    let loaded = LINKER
-        .with_resolver(resolver)
+    let loaded = Linker::new()
+        .with_resolver(SearchPathResolver::new())
         .run()
-        .load(&mut context, root)?;
+        .load(&mut context, PathBuf::from("target/example-library/libexample.so"))?;
 
-    let run = unsafe {
-        context
-            .module(loaded.root())?
-            .get::<extern "C" fn() -> i32>("run").expect("symbol lookup failed")
-            .expect("symbol `run` not found")
-    };
-    let _ = run();
+    // SAFETY: example.c defines int example_add(int, int).
+    unsafe {
+        let add = context.module(loaded.root())?
+            .get::<unsafe extern "C" fn(c_int, c_int) -> c_int>("example_add")?
+            .ok_or("missing example_add")?;
+        assert_eq!(add(2, 3), 5);
+    }
     drop(loaded.release(&mut context)?);
-
     Ok(())
 }
 ```
 
-## Benchmarks
-
-Run `bash ci/bench.sh` to compare load and teardown times for Relink and libloading.
-See [the benchmark guide](benches/README.md) for setup and measurement details.
-
-## Feature Flags
-
-| Feature | Default | Purpose |
-| --- | --- | --- |
-| `libc` | Yes | Use the libc backend on Linux/Android; enable `host::open` on Linux/glibc |
-| `lazy-binding` | Yes | Enable the built-in native PLT/GOT lazy binder |
-| `object` | Yes | Enable relocatable object (`ET_REL`) loading and `LoaderRun::load_object()` |
-| `version` | No | Enable version-aware symbol lookup such as `get_version()` |
-| `log` | No | Enable `log` integration for loader and relocation diagnostics |
-| `portable-atomic` | No | Support targets without native pointer-sized atomics |
-| `use-syscall` | No | Use the Linux syscall backend instead of libc |
-| `full` | Yes | Convenience bundle: `lazy-binding`, `object`, `libc` |
-
-Notes:
-
-- TLS requires no feature flag; use `DefaultTlsResolver` or a custom resolver.
-- `host::open` explicitly imports native library exports into a process domain using `DefaultTlsResolver`. The module retains the native handle; no libraries are imported automatically. It reads dynamic symbol/version metadata through program headers, without requiring section headers, and does not import static TLS offsets.
-- `lazy-binding` only enables the built-in implementation; custom `LazyBinder` implementations do not require this feature.
+More examples: [memory loading](examples/load_from_memory.rs) · [object files](examples/load_object.rs) · [layout changes](examples/linker_scan_first.rs) · [host imports](examples/host_import.rs).
 
 ## Platform Support
 
@@ -147,21 +112,46 @@ Notes:
 | `loongarch64` | ✅ | 🚧 | 🚧 |
 | `xtensa` | 🔧 | 🚧 | 🚧 |
 
-Legend: ✅ supported, 🔧 basic support, 🚧 pending. Section-reorder repair is currently available on `x86_64`; `.o` / `ET_REL` relocation is available on `x86_64` and `riscv64`. Contributions for the other architectures are welcome.
+✅ Supported · 🔧 Partial support · 🚧 Pending.
 
 Xtensa currently supports dynamic relocation, but not lazy binding or TLS
 relocations.
 
+## Feature Flags
+
+The default `full` set enables `libc`, `object`, and `lazy-binding`. For a minimal libc build:
+
+```toml
+elf_loader = { version = "0.18.0", default-features = false, features = ["libc"] }
+```
+
+<details>
+<summary>All feature flags</summary>
+
+| Feature | Default | Purpose |
+| --- | --- | --- |
+| `libc` | Yes | Use the libc backend on Linux/Android; enable `host::open` on Linux/glibc |
+| `lazy-binding` | Yes | Enable the built-in native PLT/GOT lazy binder |
+| `object` | Yes | Enable relocatable object (`ET_REL`) loading and `LoaderRun::load_object()` |
+| `version` | No | Enable version-aware symbol lookup such as `get_version()` |
+| `log` | No | Enable `log` integration for loader and relocation diagnostics |
+| `portable-atomic` | No | Support targets without native pointer-sized atomics |
+| `use-syscall` | No | Use the Linux syscall backend instead of libc |
+| `full` | Yes | Convenience bundle: `lazy-binding`, `object`, `libc` |
+
+</details>
+
+TLS is configured through a resolver, without a feature flag. Host libraries require
+explicit imports; see the [example](examples/host_import.rs).
+
 ## Contributing
 
-Issues and pull requests are welcome. Star the project if it is useful in your work.
+Report problems in [Issues](https://github.com/weizhiao/Relink/issues), or follow the
+[contribution guide](CONTRIBUTING.md) to submit improvements.
 
 ## License
 
-This project is dual-licensed under either of the following:
-
-- [MIT License](LICENSE-MIT)
-- [Apache License 2.0](LICENSE-APACHE)
+Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE).
 
 ## Contributors
 

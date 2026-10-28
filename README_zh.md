@@ -1,7 +1,8 @@
 # Relink：Rust ELF 加载器与运行时链接器
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/weizhiao/Relink/main/docs/assets/logo.svg" width="560" alt="Relink logo">
+  <img src="docs/assets/logo-dark.svg#gh-dark-mode-only" width="500" alt="Relink">
+  <img src="docs/assets/logo.svg#gh-light-mode-only" width="500" alt="Relink">
 </p>
 
 <p align="center">
@@ -14,124 +15,85 @@
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> | <a href="README_zh.md">简体中文</a> |
-  <a href="CONTRIBUTING.md">Contributing</a> | <a href="CONTRIBUTING_zh.md">贡献指南</a>
+  <a href="README.md">English</a> | <a href="README_zh.md">简体中文</a>
 </p>
 
 <p align="center">
-  <strong>在 no_std 环境中加载、链接和改写 ELF。</strong>
+  <strong>高性能 · 可定制 · 支持 no_std</strong>
 </p>
 
-Relink 是一个高可定制、高性能的 Rust ELF 加载与运行时链接库。它可以从文件或内存加载 `.so`、可执行文件和目标文件，并完成依赖解析、重定位和符号查找；同时提供 observer 机制，用于观察或定制加载、重定位、符号绑定与生命周期事件。
+Relink 是用 Rust 编写的 ELF 加载器与运行时链接器，面向插件、JIT 和自定义运行时。你可以自主控制依赖解析、符号绑定、内存布局与加载生命周期。
 
-## 什么时候用
+[快速开始](#快速开始) · [性能数据](#基准测试) · [平台支持](#平台支持) · [运行示例](examples/README.md) · [API 文档](https://docs.rs/elf_loader)
 
-- 运行时加载插件、JIT 产物或热更新模块。
-- 需要自己控制 `DT_NEEDED` 依赖、符号作用域或重定位处理。
-- 需要通过 observer 机制跟踪或改写加载、重定位、符号绑定与 init/fini 流程。
-- 需要从内存加载 ELF，或接入自己的 mmap / 内存管理后端。
-- 需要先扫描依赖和 section，再做布局重排、热路径代码聚集、大页映射或自定义处理。
-- 需要加载 `.o` / `.ko` 这类可重定位 ELF。
-- 需要在 `no_std`、内核、嵌入式或非标准运行时中保留 ELF 加载能力。
+## 核心能力
 
-## 可以加载什么
+- **多种输入**：从文件或内存加载共享库、可执行文件与可重定位目标文件（`.o` / `.ko`）。
+- **链接策略可控**：自定义依赖解析、符号作用域和重定位，通过 observer 跟踪或干预加载过程。
+- **加载前优化**：先扫描再布局，支持 section 重排与热代码聚集；架构范围见[平台支持](#平台支持)。
+- **适配你的运行时**：支持 `no_std`，可替换 mmap 与内存访问后端，接入内核、嵌入式或远程内存。
 
-- 共享对象 / 动态库（`ET_DYN`）
-- 可执行文件与 PIE 风格镜像（`ET_EXEC`，以及按可执行文件处理的 `ET_DYN`）
-- 可重定位目标文件（`ET_REL`，例如 `.o` / `.ko`）
+## 基准测试
 
-## 和 `dlopen` 相比
+在本次 10 个系统库与 `libloading` 0.9.0（glibc）的对照中，Relink **加载耗时减少约 4–32%**，**符号命中耗时约为 1/3**。
+图中为平均耗时和 95% 置信区间，越低越好。
 
-| 能力 | Relink | `dlopen` 风格加载 |
-| --- | --- | --- |
-| 内存加载 | ✅ 可从路径、字节缓冲区或已解析 ELF 输入加载 | ❌ |
-| `ET_REL` 加载 | ✅ 可加载和重定位 `.o` / `.ko` / `ET_REL` 文件 | ❌ |
-| 链接前规划 | ✅ 可先解析依赖和 section，再决定映射方式 | ❌ |
-| Section 重排 | ✅ 在 `x86_64` 上可于映射前调整 section 布局，用于热路径聚集或自定义重排 | ❌ |
-| 映射策略 | ✅ 可替换 mmap、页大小、权限和内存访问后端 | ❌ |
-| 依赖与符号策略 | ✅ 可自定义 `DT_NEEDED` 解析、符号 scope 和重定位拦截 | ❌ |
-| Observer 事件 | ✅ 可在加载、符号绑定、重定位等阶段插入 hook | ❌ |
-| 上下文隔离 | ✅ 多个 `LinkContext` 独立保存模块、依赖图和符号作用域 | ❌ |
-| 远程 / 异构加载 | ✅ 可用自定义内存访问在本地装载远程设备或异构目标 ELF | ❌ |
+**加载与卸载 · µs**
+
+![Relink 与 libloading 的加载和卸载耗时对比](benches/figures/load-teardown-dark.svg#gh-dark-mode-only)
+![Relink 与 libloading 的加载和卸载耗时对比](benches/figures/load-teardown.svg#gh-light-mode-only)
+
+卸载耗时整体相近。不计入 context 创建、销毁及宿主导入。
+
+**符号查找 · ns**
+
+![Relink 与 libloading 的符号命中和未命中耗时对比](benches/figures/symbol-lookup-dark.svg#gh-dark-mode-only)
+![Relink 与 libloading 的符号命中和未命中耗时对比](benches/figures/symbol-lookup.svg#gh-light-mode-only)
+
+符号查找比较的是公开 API：Relink 搜索根库导出，`dlsym` 还可能搜索依赖；未命中包含各自的错误处理成本。
+
+| 测试配置 | 值 |
+| --- | --- |
+| 日期 / commit | 2026-10-29 · `ed37e60` |
+| 环境 | Ryzen 9 7945HX · Linux 7.0.11-arch1-1 x86_64 · glibc 2.43 · Rust 1.96.0 |
+| 采样 | 固定 CPU 2；每项预热 1 秒、测量 2 秒、30 个样本；热文件缓存 |
+
+复现：`taskset -c 2 bash ci/bench.sh`。依赖与测量口径见[基准指南](benches/README.md)。
 
 ## 快速开始
-
-默认 feature 集合是 `full`，包含 libc 后端、可重定位目标文件加载和内置的本机 lazy binder：
 
 ```toml
 [dependencies]
 elf_loader = "0.18.0"
 ```
 
-如果你需要更小的构建，可以关闭默认 feature 后按需选择：
-
-```toml
-[dependencies]
-elf_loader = { version = "0.18.0", default-features = false, features = ["libc"] }
-```
-
-### 使用 Linker 加载依赖
+下面的例子加载动态库、调用函数并释放模块。先按[示例指南](examples/README.md#build-the-example-library)
+编译 `libexample.so`，从仓库根目录运行；也可直接执行 `cargo run --example linker_load`。
 
 ```rust
-use elf_loader::{
-    LinkContext, Linker, Result,
-    input::PathBuf,
-    linker::{LdCache, SearchConfig, SearchPathResolver},
-};
+use elf_loader::{LinkContext, Linker, input::PathBuf, linker::SearchPathResolver};
+use std::ffi::c_int;
 
-const LINKER: Linker = Linker::new();
-
-fn main() -> Result<()> {
-    let root = PathBuf::from("path/to/plugin.so");
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut context = LinkContext::for_process();
-    // 按目标系统配置合适的路径。
-    let config = SearchConfig::new()
-        .library_path("$ORIGIN/plugins:/opt/app/lib", "/opt/app/bin")
-        .cache(LdCache::load_system()?)
-        .default_dirs(["/lib", "/usr/lib"]);
-    let resolver = SearchPathResolver::with_config(config);
-
-    let loaded = LINKER
-        .with_resolver(resolver)
+    let loaded = Linker::new()
+        .with_resolver(SearchPathResolver::new())
         .run()
-        .load(&mut context, root)?;
+        .load(&mut context, PathBuf::from("target/example-library/libexample.so"))?;
 
-    let run = unsafe {
-        context
-            .module(loaded.root())?
-            .get::<extern "C" fn() -> i32>("run").expect("symbol lookup failed")
-            .expect("symbol `run` not found")
-    };
-    let _ = run();
+    // SAFETY: example.c 定义了 int example_add(int, int)。
+    unsafe {
+        let add = context.module(loaded.root())?
+            .get::<unsafe extern "C" fn(c_int, c_int) -> c_int>("example_add")?
+            .ok_or("missing example_add")?;
+        assert_eq!(add(2, 3), 5);
+    }
     drop(loaded.release(&mut context)?);
-
     Ok(())
 }
 ```
 
-## 基准测试
-
-运行 `bash ci/bench.sh`，比较 Relink 与 libloading 的加载和清理耗时。
-环境配置与测量细节见[基准指南](benches/README.md)。
-
-## Feature 开关
-
-| Feature | 默认 | 作用 |
-| --- | --- | --- |
-| `libc` | 是 | 在 Linux/Android 上使用 libc 后端；在 Linux/glibc 上提供 `host::open` |
-| `lazy-binding` | 是 | 启用内置的本机 PLT/GOT lazy binder |
-| `object` | 是 | 启用可重定位目标文件（`ET_REL`）加载和 `LoaderRun::load_object()` |
-| `version` | 否 | 启用带符号版本的查找，例如 `get_version()` |
-| `log` | 否 | 启用基于 `log` 的加载与重定位诊断输出 |
-| `portable-atomic` | 否 | 为不支持原生指针宽度原子操作的目标提供支持 |
-| `use-syscall` | 否 | 在 Linux 上使用 syscall 后端，而不是 libc |
-| `full` | 是 | 便捷组合：`lazy-binding`、`object`、`libc` |
-
-说明：
-
-- TLS 无需 feature 开关，可使用 `DefaultTlsResolver` 或自定义 resolver。
-- `host::open` 将宿主库导出显式导入使用 `DefaultTlsResolver` 的进程域。模块持有原生库句柄，不会自动导入任何库。通过程序头读取动态符号和版本元数据，不要求保留节头表；暂不导入静态 TLS 偏移。
-- `lazy-binding` 仅控制内置实现，自定义 `LazyBinder` 无需开启该 feature。
+更多用法：[内存加载](examples/load_from_memory.rs) · [目标文件](examples/load_object.rs) · [布局重排](examples/linker_scan_first.rs) · [宿主库导入](examples/host_import.rs)。
 
 ## 平台支持
 
@@ -146,20 +108,43 @@ fn main() -> Result<()> {
 | `loongarch64` | ✅ | 🚧 | 🚧 |
 | `xtensa` | 🔧 | 🚧 | 🚧 |
 
-符号：✅ 支持，🔧 基础支持，🚧 待补齐。Section 重排修复目前支持 `x86_64`；`.o` / `ET_REL` 重定位支持 `x86_64` 和 `riscv64`。其他架构欢迎补齐。
+✅ 支持 · 🔧 部分支持 · 🚧 待补齐。
 
 Xtensa 目前支持动态重定位，但尚不支持 lazy binding 和 TLS 相关重定位。
 
+## Feature 开关
+
+默认 `full` 启用 `libc`、`object` 和 `lazy-binding`。最小 libc 配置：
+
+```toml
+elf_loader = { version = "0.18.0", default-features = false, features = ["libc"] }
+```
+
+<details>
+<summary>查看全部 feature</summary>
+
+| Feature | 默认 | 作用 |
+| --- | --- | --- |
+| `libc` | 是 | 在 Linux/Android 上使用 libc 后端；在 Linux/glibc 上提供 `host::open` |
+| `lazy-binding` | 是 | 启用内置的本机 PLT/GOT lazy binder |
+| `object` | 是 | 启用可重定位目标文件（`ET_REL`）加载和 `LoaderRun::load_object()` |
+| `version` | 否 | 启用带符号版本的查找，例如 `get_version()` |
+| `log` | 否 | 启用基于 `log` 的加载与重定位诊断输出 |
+| `portable-atomic` | 否 | 为不支持原生指针宽度原子操作的目标提供支持 |
+| `use-syscall` | 否 | 在 Linux 上使用 syscall 后端，而不是 libc |
+| `full` | 是 | 便捷组合：`lazy-binding`、`object`、`libc` |
+
+</details>
+
+TLS 通过 resolver 配置，无需 feature 开关；宿主库需要显式导入，见[示例](examples/host_import.rs)。
+
 ## 参与贡献
 
-欢迎通过 Issue 和 PR 一起把 Relink 做得更好。如果项目对你有帮助，也欢迎点个 Star。
+提交 [Issue](https://github.com/weizhiao/Relink/issues) 反馈问题，或按[贡献指南](CONTRIBUTING_zh.md) 提交改进。
 
 ## 许可证
 
-本项目采用双许可证：
-
-- [MIT License](LICENSE-MIT)
-- [Apache License 2.0](LICENSE-APACHE)
+采用 [MIT](LICENSE-MIT) 或 [Apache-2.0](LICENSE-APACHE) 双许可证。
 
 ## 贡献者
 
