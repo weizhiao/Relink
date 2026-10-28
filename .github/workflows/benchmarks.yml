@@ -1,4 +1,4 @@
-name: Load and teardown benchmarks
+name: Library benchmarks
 
 on:
   workflow_dispatch:
@@ -38,8 +38,8 @@ jobs:
       - name: Install benchmark dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential zlib1g liblz4-1 libzstd1 libsqlite3-0 libpng16-16t64 libfreetype6 libbrotli1 libbz2-1.0
-      - name: Measure load and teardown
+          sudo apt-get install -y build-essential zlib1g liblz4-1 libzstd1 libsqlite3-0 libpng16-16t64 libfreetype6 libbrotli1 libbz2-1.0 libexpat1 libpcre2-8-0 libgmp10 libmpfr6
+      - name: Measure load, teardown and symbol lookup
         run: bash ci/bench.sh
       - name: Publish benchmark summary
         if: always()
@@ -50,7 +50,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: load-teardown-${{ github.sha }}
+          name: library-benchmarks-${{ github.sha }}
           path: |
             target/benchmark-report/
             target/criterion/

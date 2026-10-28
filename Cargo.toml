@@ -104,7 +104,7 @@ gen-elf = { path = "tools/gen-elf" }
 object = { workspace = true, features = ["write"] }
 
 [[bench]]
-name = "load_teardown"
+name = "library"
 harness = false
 required-features = ["libc", "version"]
 
