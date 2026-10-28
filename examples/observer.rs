@@ -1,11 +1,7 @@
-#[path = "support/mod.rs"]
-mod fixture_support;
-
 use elf_loader::{
-    LinkContext, Linker, Loader, Result,
+    Result,
     arch::NativeArch,
-    input::PathBuf,
-    memory::{RegionAccess, VmAddr},
+    memory::RegionAccess,
     observer::{
         BeforeLoadEvent, DynamicRelocatedEvent, LinkerObserver, LoadObserver, RelocationObserver,
         SymbolBindingEvent,
@@ -14,17 +10,19 @@ use elf_loader::{
     tls::TlsResolver,
 };
 
+const LIBRARY: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/target/example-library/libexample.so"
+);
+
 #[derive(Debug, Default)]
 struct UserData {
     load_id: u32,
 }
 
-const LOADER: Loader<UserData> = Loader::new().with_data();
-
-struct Observer;
-
-fn host_print(message: &str) {
-    println!("host print: {message}");
+#[derive(Default)]
+struct Observer {
+    next_load_id: u32,
 }
 
 impl LoadObserver<UserData> for Observer {
@@ -32,12 +30,14 @@ impl LoadObserver<UserData> for Observer {
         &mut self,
         mut event: BeforeLoadEvent<'_, UserData, <NativeArch as RelocationArch>::Layout>,
     ) -> Result<()> {
+        self.next_load_id += 1;
+        event.user_data_mut().load_id = self.next_load_id;
         println!(
-            "loading {} with {} program headers",
+            "loading #{}: {} with {} program headers",
+            self.next_load_id,
             event.path(),
             event.phdrs().len()
         );
-        event.user_data_mut().load_id = 42;
         Ok(())
     }
 }
@@ -51,9 +51,11 @@ impl RelocationObserver for Observer {
         &mut self,
         event: &mut SymbolBindingEvent<'_, D, NativeArch, R, Tls>,
     ) -> Result<()> {
-        if event.symbol_name() == b"print" {
-            event.set_resolved_addr(VmAddr::from_ptr(host_print as *const ()));
-        }
+        println!(
+            "binding {} to {:?}",
+            event.symbol_name().escape_ascii(),
+            event.resolved_addr()
+        );
         Ok(())
     }
 
@@ -73,34 +75,38 @@ impl RelocationObserver for Observer {
             );
             Ok(())
         });
+        event.lifecycle_mut().set_fini_hook(|event| {
+            println!("finalizing {}", event.name().escape_ascii());
+            Ok(())
+        });
         Ok(())
     }
 }
 
 impl LinkerObserver<UserData> for Observer {}
 
-fn main() -> Result<()> {
-    let fixtures = fixture_support::ensure_all();
-    let linker = Linker::new()
-        .with_loader(LOADER)
-        .with_resolver(fixture_support::search_path_resolver());
-    let mut context = LinkContext::for_process();
-    let middle = linker
-        .run()
-        .with_observer(Observer)
-        .load(&mut context, PathBuf::from(fixtures.middle_str()))?;
-    let module = context.module(middle.root())?;
+fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    use elf_loader::{LinkContext, Linker, Loader, input::PathBuf, linker::SearchPathResolver};
+    use std::ffi::c_int;
 
-    let middle_value = unsafe {
-        module
-            .get::<extern "C" fn() -> i32>("middle_value")
-            .expect("symbol lookup failed")
-            .expect("missing middle_value")
+    env_logger::init();
+    let mut context = LinkContext::for_process();
+    let loaded = Linker::new()
+        .with_loader(Loader::new().with_data::<UserData>())
+        .with_resolver(SearchPathResolver::new())
+        .run()
+        .with_observer(Observer::default())
+        .load(&mut context, PathBuf::from(LIBRARY))?;
+
+    let module = context.module(loaded.root())?;
+    // SAFETY: examples/library/example.c defines int example_value(void).
+    let value = unsafe {
+        let function = module
+            .get::<unsafe extern "C" fn() -> c_int>("example_value")?
+            .ok_or("missing example_value")?;
+        function()
     };
-    println!(
-        "middle_value() = {} from {}",
-        middle_value(),
-        module.name().escape_ascii()
-    );
+    println!("after initialization: example_value() = {value}");
+    drop(loaded.release(&mut context)?);
     Ok(())
 }

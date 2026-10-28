@@ -142,8 +142,8 @@ name = "load_object"
 required-features = ["object"]
 
 [[example]]
-name = "build_fixtures"
-path = "examples/support/build_fixtures.rs"
+name = "host_import"
+required-features = ["libc", "version"]
 
 [features]
 default = ["full"]

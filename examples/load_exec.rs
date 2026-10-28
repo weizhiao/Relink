@@ -1,27 +1,16 @@
-#[path = "support/mod.rs"]
-mod fixture_support;
+use elf_loader::{AddressSpaceId, Domain, Loader};
 
-use elf_loader::{AddressSpaceId, Domain};
-use elf_loader::{Loader, Result};
-
-const LOADER: Loader = Loader::new();
-
-fn main() -> Result<()> {
-    unsafe { std::env::set_var("RUST_LOG", "trace") };
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
-
-    let exec_path = fixture_support::ensure_native_exec();
-
-    let exec = LOADER
+    let path = std::env::args()
+        .nth(1)
+        .ok_or("usage: load_exec <ELF executable>")?;
+    let exec = Loader::new()
         .run(Domain::native(AddressSpaceId::PROCESS))
-        .load_exec(
-            exec_path
-                .to_str()
-                .expect("fixture path must be valid UTF-8"),
-        )?;
+        .load_exec(path)?;
+
     println!("Loaded executable: {}", exec.name().escape_ascii());
     println!("Entry point: 0x{:x}", exec.entry());
     println!("Base address: {}", exec.base());
-
     Ok(())
 }

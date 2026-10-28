@@ -1,80 +1,25 @@
-#[path = "support/mod.rs"]
-mod fixture_support;
+use elf_loader::{AddressSpaceId, Domain, Loader, Relocator};
+use std::ffi::c_int;
 
-use elf_loader::{AddressSpaceId, Domain};
-use elf_loader::{
-    Loader, Relocator, Result,
-    image::{ModuleHandle, SyntheticModule, SyntheticSymbol},
-};
+const OBJECT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/target/example-library/example.o"
+);
 
-const LOADER: Loader = Loader::new();
-
-fn host_symbols() -> SyntheticModule {
-    fn print(s: &str) {
-        println!("{}", s);
-    }
-
-    SyntheticModule::new(
-        &Domain::<elf_loader::arch::NativeArch>::native(AddressSpaceId::PROCESS),
-        "__host",
-        [SyntheticSymbol::function(c"print", print as *const ())],
-    )
-}
-
-fn main() -> Result<()> {
-    unsafe { std::env::set_var("RUST_LOG", "trace") };
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
+    let raw = Loader::new()
+        .run(Domain::native(AddressSpaceId::PROCESS))
+        .load_object(OBJECT)?;
+    let object = Relocator::new().run(raw).relocate()?;
 
-    let fixtures = fixture_support::ensure_all();
-    let base = Relocator::new()
-        .run(
-            LOADER
-                .run(Domain::native(AddressSpaceId::PROCESS))
-                .load_object(fixtures.base_object_str())?,
-        )
-        .with_modules([host_symbols()])?
-        .relocate()?;
-    let middle = Relocator::new()
-        .run(
-            LOADER
-                .run(Domain::native(AddressSpaceId::PROCESS))
-                .load_dylib(fixtures.middle_str())?,
-        )
-        .with_modules([
-            ModuleHandle::from(host_symbols()),
-            ModuleHandle::from(&base),
-        ])?
-        .relocate()?;
-    let leaf = Relocator::new()
-        .run(
-            LOADER
-                .run(Domain::native(AddressSpaceId::PROCESS))
-                .load_object(fixtures.leaf_object_str())?,
-        )
-        .with_modules([
-            ModuleHandle::from(host_symbols()),
-            ModuleHandle::from(&base),
-            ModuleHandle::from(&middle),
-        ])?
-        .relocate()?;
-    let f = unsafe {
-        base.get::<extern "C" fn() -> i32>("base_value")
-            .expect("symbol lookup failed")
-            .unwrap()
+    // SAFETY: examples/library/example.c defines int example_add(int, int).
+    let value = unsafe {
+        let add = object
+            .get::<unsafe extern "C" fn(c_int, c_int) -> c_int>("example_add")?
+            .ok_or("missing example_add")?;
+        add(2, 3)
     };
-    assert!(f() == 1);
-    let f = unsafe {
-        middle
-            .get::<extern "C" fn() -> i32>("middle_value")
-            .expect("symbol lookup failed")
-            .unwrap()
-    };
-    assert!(f() == 2);
-    let f = unsafe {
-        leaf.get::<extern "C" fn() -> i32>("leaf_value")
-            .expect("symbol lookup failed")
-            .unwrap()
-    };
-    assert!(f() == 3);
+    println!("example_add(2, 3) = {value}");
     Ok(())
 }

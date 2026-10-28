@@ -39,7 +39,8 @@ fi
 cargo clean
 
 if [ "${MINI_LOADER}" = "1" ]; then
-	cargo run --example build_fixtures -- native-exec
+	mkdir -p target
+	"${CC:-cc}" -no-pie -fno-pic ci/native_exec.c -o target/native_exec
 	"${CARGO}" build --target="${TARGET}"
 	"${CARGO}" ${OP} --target="${TARGET}" ${ARGS}
 else
