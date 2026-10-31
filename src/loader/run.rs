@@ -301,7 +301,14 @@ where
         }
 
         let page_size = loader.page_size()?.bytes();
-        let segments = load_segments(phdrs, ehdr.is_dylib(), loader.mapper(), object, page_size)?;
+        let segments = load_segments(
+            phdrs,
+            ehdr.is_dylib(),
+            loader.mapper(),
+            object,
+            page_size,
+            loader.thp(),
+        )?;
         let entry = image_entry::<Arch>(segments.base(), &ehdr);
         let builder = ImageBuilder::new(
             segments,
@@ -411,7 +418,7 @@ where
         let path = path.into();
         let phdrs = phdrs.into();
         let page_size = self.loader.page_size()?.bytes();
-        let layout = parse_segments(&phdrs, true, page_size)?;
+        let layout = parse_segments(&phdrs, true, page_size, None)?;
         let min_vaddr = VmOffset::new(layout.offset);
         let mapped_addr = load_bias + min_vaddr;
         let segments = ElfSegments::new(

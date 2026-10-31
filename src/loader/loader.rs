@@ -39,6 +39,7 @@ where
 {
     mapper: M,
     page_size: Option<PageSize>,
+    thp: Option<PageSize>,
     force_static_tls: bool,
     _marker: PhantomData<fn() -> (D, Arch)>,
 }
@@ -54,6 +55,7 @@ where
 struct LoaderFields<M> {
     mapper: NoDrop<M>,
     page_size: Option<PageSize>,
+    thp: Option<PageSize>,
     force_static_tls: bool,
 }
 
@@ -68,11 +70,13 @@ impl<M> LoaderFields<M> {
         let Self {
             mapper,
             page_size,
+            thp,
             force_static_tls,
         } = self;
         Loader {
             mapper: mapper.into_inner(),
             page_size,
+            thp,
             force_static_tls,
             _marker: PhantomData,
         }
@@ -88,12 +92,14 @@ impl<M> LoaderFields<M> {
     {
         let Self {
             page_size,
+            thp,
             force_static_tls,
             ..
         } = self;
         Loader {
             mapper,
             page_size,
+            thp,
             force_static_tls,
             _marker: PhantomData,
         }
@@ -112,6 +118,7 @@ where
             mapper: self.mapper.clone(),
 
             page_size: self.page_size,
+            thp: self.thp,
             force_static_tls: self.force_static_tls,
             _marker: PhantomData,
         }
@@ -127,6 +134,7 @@ impl Loader<(), NativeArch, DefaultMmap> {
             mapper: DefaultMmap::new(),
 
             page_size: None,
+            thp: None,
             force_static_tls: false,
             _marker: PhantomData,
         }
@@ -155,6 +163,7 @@ where
                 mapper: NoDrop::read(ptr::addr_of!((*this).mapper)),
 
                 page_size: ptr::read(ptr::addr_of!((*this).page_size)),
+                thp: ptr::read(ptr::addr_of!((*this).thp)),
                 force_static_tls: ptr::read(ptr::addr_of!((*this).force_static_tls)),
             }
         }
@@ -168,6 +177,11 @@ where
     #[inline]
     pub(crate) const fn force_static_tls(&self) -> bool {
         self.force_static_tls
+    }
+
+    #[inline]
+    pub(super) const fn thp(&self) -> Option<PageSize> {
+        self.thp
     }
 
     /// Starts a loader run in a fixed runtime domain with fresh scratch space.
@@ -222,6 +236,33 @@ where
     /// mapping backend and with every loaded ELF's `PT_LOAD` alignment.
     pub const fn with_page_size(mut self, page_size: PageSize) -> Self {
         self.page_size = Some(page_size);
+        self
+    }
+
+    /// Configures transparent huge pages for eligible file-backed LOAD ranges.
+    ///
+    /// Disabled by default. The caller supplies a target huge-page size appropriate
+    /// for the mapping backend; no system policy is probed. This may increase
+    /// shared-image address alignment and sends `MADV_HUGEPAGE` for eligible ranges
+    /// after mapping. The base page size, segment permissions, and relative layout
+    /// stay unchanged. Candidates come from readable, non-writable LOAD headers;
+    /// copied inputs, section arenas, and borrowed mappings are outside this policy.
+    /// For overlapping LOAD segments, advice applies to the final mappings.
+    ///
+    /// The size must be a power of two larger than the base page size; other
+    /// values disable this optimization. This does not request reserved hugetlb pages.
+    ///
+    /// Mapping failures, including failure to satisfy the increased alignment,
+    /// are returned without retrying at a smaller alignment. Advice failures do
+    /// not fail a load, and success does not guarantee huge pages.
+    ///
+    /// ```
+    /// use elf_loader::{Loader, os::PageSize};
+    ///
+    /// let loader = Loader::new().with_thp(PageSize::Huge2MiB);
+    /// ```
+    pub const fn with_thp(mut self, page_size: PageSize) -> Self {
+        self.thp = Some(page_size);
         self
     }
 

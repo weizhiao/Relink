@@ -1,6 +1,47 @@
 # Performance benchmarks
 
-Requires Linux/glibc and libraries listed in `/etc/ld.so.cache`.
+The `library` suite requires Linux/glibc and libraries listed in `/etc/ld.so.cache`.
+
+## THP application execution
+
+```sh
+cargo bench --bench thp --features version
+# Use the same available CPU for all three cases:
+taskset -c 0 cargo bench --bench thp --features version
+```
+
+Requires Linux/glibc and `python3` with a matching shared `libpython` and standard
+library (Python 3.10+). The benchmark discovers the installed library and compares
+exactly three ways of loading it:
+
+| Case | Loader |
+|---|---|
+| `relink` | `Loader::new()` |
+| `relink_thp` | `Loader::new().with_thp(...)`, using the kernel's PMD page size |
+| `glibc` | `libloading` / glibc `dlopen(RTLD_NOW \| RTLD_LOCAL)` |
+
+All three execute the same tasks in `workloads/python.py`:
+
+- **`stdlib_compile`:** compile nine real standard-library source files into
+  bytecode, without executing the modules or writing `.pyc` files.
+- **`json_roundtrip`:** decode and re-encode a JSON source-index document built
+  from those files and their metadata.
+
+Only task execution and its result check are timed. Loading, interpreter startup,
+source-file I/O, preparation, warmup, and finalization are outside timing. Each
+loader runs in a fresh process with a fixed Python hash seed and no `site`
+customizations. Library paths, Python versions, input sizes, JSON accelerators,
+and result checksums are printed to make the cases comparable.
+
+Defaults are 1 s warmup, 5 s measurement, and 30 samples. Criterion options and
+workload filters are forwarded to all three workers, and results are written to
+`target/criterion/thp_python/`. For example, append `-- stdlib_compile` to run
+only compilation. `ci/bench.sh` continues to run the separate library suite.
+
+This compares the loaders' own behavior: the harness does not force base pages,
+force THP promotion, change system policy, or rewrite/copy the library. The THP
+configuration is a request; whether the kernel supplies huge pages still depends
+on its policy and mapping state. Timings alone do not prove huge-page backing.
 
 ## Fixed workloads
 

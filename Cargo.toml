@@ -108,6 +108,11 @@ name = "library"
 harness = false
 required-features = ["libc", "version"]
 
+[[bench]]
+name = "thp"
+harness = false
+required-features = ["libc", "version"]
+
 [[test]]
 name = "linker"
 path = "tests/linker/main.rs"

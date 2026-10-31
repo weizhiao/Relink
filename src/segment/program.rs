@@ -3,9 +3,11 @@ use crate::{
     elf::{ElfLayout, ElfPhdr, ElfProgramFlags, ElfProgramType},
     input::{ElfReader, FileBacking, check_read_range},
     memory::{VmAddr, VmOffset, rounddown, roundup},
-    os::{Mmap, ProtFlags, SpaceInit, SpaceLayout},
+    os::{Mmap, PageSize, ProtFlags, SpaceInit, SpaceLayout},
     segment::{ElfSegment, ElfSegments, SegmentContent, populate_segments, protect_segments},
 };
+
+use super::thp::FileThp;
 
 /// Convert ELF program header flags to memory protection flags
 #[inline]
@@ -30,6 +32,7 @@ pub(crate) fn load_segments<M>(
     mapper: &M,
     object: &impl ElfReader,
     page_size: usize,
+    thp: Option<PageSize>,
 ) -> Result<ElfSegments<M::Region>>
 where
     M: Mmap + ?Sized,
@@ -43,30 +46,41 @@ where
         Some(range) => mapper.file_backing(range)?,
         None => None,
     };
-    let layout = parse_segments(phdrs, is_dylib, page_size)?;
-    if is_dylib
-        && let Some(backing) = file_backing
-        && let Some(loaded) = map_file_segments(phdrs, mapper, &layout, backing, page_size)?
-    {
-        return Ok(loaded);
-    }
-    let segments = phdrs
-        .iter()
-        .filter(|phdr| phdr.program_type() == ElfProgramType::LOAD)
-        .map(|phdr| phdr.create_segment(page_size));
-    let use_file = file_backing.is_some();
-    let (prot, init) = if use_file {
-        (ProtFlags::PROT_NONE, SpaceInit::Reserve)
+    let thp = FileThp::new(thp, file_backing, page_size);
+    let preferred_align = thp.as_ref().and_then(|thp| thp.preferred_alignment(phdrs));
+    let layout = parse_segments(phdrs, is_dylib, page_size, preferred_align)?;
+    let mapped = if is_dylib && let Some(backing) = file_backing {
+        map_file_segments(phdrs, mapper, &layout, backing, page_size)?
     } else {
-        (ProtFlags::PROT_WRITE, SpaceInit::Zeroed)
+        None
     };
-    let region = unsafe { mapper.create_space(layout, prot, init) }?;
-    let min_vaddr = VmOffset::new(layout.offset);
-    let base = region.addr() - min_vaddr;
-    let loaded = ElfSegments::new(region, base, min_vaddr);
-    populate_segments(mapper, object, &loaded, segments.clone(), file_backing)?;
-    if !use_file {
-        protect_segments(&loaded, segments)?;
+    let loaded = if let Some(loaded) = mapped {
+        loaded
+    } else {
+        let segments = phdrs
+            .iter()
+            .filter(|phdr| phdr.program_type() == ElfProgramType::LOAD)
+            .map(|phdr| phdr.create_segment(page_size));
+        let use_file = file_backing.is_some();
+        let (prot, init) = if use_file {
+            (ProtFlags::PROT_NONE, SpaceInit::Reserve)
+        } else {
+            (ProtFlags::PROT_WRITE, SpaceInit::Zeroed)
+        };
+        let region = unsafe { mapper.create_space(layout, prot, init) }?;
+        let min_vaddr = VmOffset::new(layout.offset);
+        let base = region.addr() - min_vaddr;
+        let loaded = ElfSegments::new(region, base, min_vaddr);
+        populate_segments(mapper, object, &loaded, segments.clone(), file_backing)?;
+        if !use_file {
+            protect_segments(&loaded, segments)?;
+        }
+        loaded
+    };
+    // All MAP_FIXED replacements, tail clearing, and segment protections must
+    // precede advice, on both the initial-file and reserved-space paths.
+    if let Some(thp) = thp {
+        thp.advise(phdrs, mapper, loaded.base());
     }
     Ok(loaded)
 }
@@ -158,11 +172,15 @@ fn map_file_segments<M: Mmap + ?Sized>(
 
 /// Parses LOAD memory layout requirements, retaining the lowest page-aligned
 /// virtual address in `offset`.
+///
+/// `preferred_align`, when present, must be a power of two. It can raise shared-image
+/// alignment only after the ELF's own alignment requirements have been validated.
 #[inline]
 pub(crate) fn parse_segments(
     phdrs: &[ElfPhdr<impl ElfLayout>],
     is_dylib: bool,
     page_size: usize,
+    preferred_align: Option<usize>,
 ) -> Result<SpaceLayout> {
     let mut min_vaddr = usize::MAX;
     let mut max_vaddr = 0;
@@ -225,7 +243,11 @@ pub(crate) fn parse_segments(
             Some(VmAddr::new(min_vaddr))
         },
         len: total_size,
-        align: alignment,
+        align: if is_dylib {
+            alignment.max(preferred_align.unwrap_or(alignment))
+        } else {
+            alignment
+        },
         offset: min_vaddr,
     })
 }

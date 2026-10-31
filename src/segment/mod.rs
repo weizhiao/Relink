@@ -7,6 +7,7 @@
 mod defs;
 mod mapping;
 mod space;
+mod thp;
 
 pub(crate) mod program;
 
