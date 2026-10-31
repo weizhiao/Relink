@@ -735,7 +735,6 @@ mod tests {
             fn publish(&self, _: TlsTemplate, _: TlsModuleId) -> Result<()> {
                 Ok(())
             }
-            fn unregister(&self, _: TlsModuleId) {}
             fn bind_tls_get_addr(&self) -> Result<VmAddr> {
                 Ok(VmAddr::new(self.0))
             }

@@ -3,7 +3,17 @@ use elf_loader::{
 };
 use gen_elf::SectionKind;
 
-use crate::support::{DTPMOD, DTPOFF, FIRST, SECOND, scenario};
+use crate::support::{DTPMOD, DTPOFF, FIRST, SECOND, TPOFF, WEAK, scenario};
+
+#[test]
+fn undefined_weak_tls_leaves_slots_untouched() {
+    let scenario = scenario();
+    for r_type in [DTPMOD, DTPOFF, TPOFF] {
+        // The generated GOT slots start at zero. An undefined weak symbol must
+        // not require a module ID or static placement, or write a DTV bias.
+        assert_eq!(scenario.slot(scenario.relocation(r_type, WEAK)), 0);
+    }
+}
 
 #[test]
 fn applies_dynamic_relocations() {

@@ -13,7 +13,7 @@ description = "A no_std-friendly ELF loader and runtime linker for Rust."
 exclude = [".gitignore", ".github", "ci", "docs"]
 
 [package.metadata.docs.rs]
-all-features = true
+features = ["full", "std", "version", "log", "portable-atomic"]
 rustdoc-args = ["--cfg", "docsrs"]
 
 [workspace.package]
@@ -106,12 +106,12 @@ object = { workspace = true, features = ["write"] }
 [[bench]]
 name = "library"
 harness = false
-required-features = ["libc", "version"]
+required-features = ["std", "version"]
 
 [[bench]]
 name = "thp"
 harness = false
-required-features = ["libc", "version"]
+required-features = ["std", "version"]
 
 [[test]]
 name = "linker"
@@ -140,7 +140,7 @@ required-features = ["lazy-binding"]
 
 [[example]]
 name = "load_bench"
-required-features = ["libc", "version"]
+required-features = ["std", "version"]
 
 [[example]]
 name = "load_object"
@@ -148,17 +148,15 @@ required-features = ["object"]
 
 [[example]]
 name = "host_import"
-required-features = ["libc", "version"]
+required-features = ["std", "version"]
 
 [features]
 default = ["full"]
-std = ["memchr/std"]
+std = ["memchr/std", "dep:libc"]
 
-# Enables the libc backend and, on Linux/glibc, native host-library imports.
-libc = ["dep:libc"]
-# A feature that enables all features.
-full = ["lazy-binding", "object", "libc"]
-# Use linux syscalls
+# Convenience bundle for standard-library loading, object files, and lazy binding.
+full = ["lazy-binding", "object", "std"]
+# Use Linux syscalls; mutually exclusive with std.
 use-syscall = ["dep:syscalls"]
 # Use the version information of symbols when resolving them.
 version = []

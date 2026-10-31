@@ -36,7 +36,7 @@ Function calls print `example_add(2, 3) = 5` or `example_value() = 7`.
 ## Host imports
 
 `host_import` loads system zlib through Relink using host libc. It requires
-Linux/glibc, `libc` (enabled by default), `version`, `libz.so.1`, and
+Linux/glibc, `std` (enabled by default), `version`, `libz.so.1`, and
 `/etc/ld.so.cache`:
 
 ```sh

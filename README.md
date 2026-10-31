@@ -119,10 +119,10 @@ relocations.
 
 ## Feature Flags
 
-The default `full` set enables `libc`, `object`, and `lazy-binding`. For a minimal libc build:
+The default `full` set enables `std`, `object`, and `lazy-binding`. For a minimal hosted build:
 
 ```toml
-elf_loader = { version = "0.18.0", default-features = false, features = ["libc"] }
+elf_loader = { version = "0.18.0", default-features = false, features = ["std"] }
 ```
 
 <details>
@@ -130,19 +130,28 @@ elf_loader = { version = "0.18.0", default-features = false, features = ["libc"]
 
 | Feature | Default | Purpose |
 | --- | --- | --- |
-| `libc` | Yes | Use the libc backend on Linux/Android; enable `host::open` on Linux/glibc |
+| `std` | Yes | Enable standard-library integration and default thread storage; use native platform services on Linux/Android and enable `host::open` on Linux/glibc |
 | `lazy-binding` | Yes | Enable the built-in native PLT/GOT lazy binder |
 | `object` | Yes | Enable relocatable object (`ET_REL`) loading and `LoaderRun::load_object()` |
 | `version` | No | Enable version-aware symbol lookup such as `get_version()` |
 | `log` | No | Enable `log` integration for loader and relocation diagnostics |
 | `portable-atomic` | No | Support targets without native pointer-sized atomics |
-| `use-syscall` | No | Use the Linux syscall backend instead of libc |
-| `full` | Yes | Convenience bundle: `lazy-binding`, `object`, `libc` |
+| `use-syscall` | No | Use the Linux syscall backend; incompatible with `std` |
+| `full` | Yes | Convenience bundle: `lazy-binding`, `object`, `std` |
 
 </details>
 
 TLS is configured through a resolver, without a feature flag. Host libraries require
 explicit imports; see the [example](examples/host_import.rs).
+
+With `std`, the default resolver uses a heap-allocated DTV owned by a pthread key
+on Linux/Android; Rust thread-local storage only caches its pointer. The DTV is
+reclaimed in the second pthread destructor round, keeping TLS blocks available
+during first-round cleanup. Arbitrarily rearmed foreign destructors may run later.
+Other `std` targets use Rust-managed thread-local storage. Pure syscall,
+bare-metal, and Windows `no_std` builds require a custom resolver/provider for
+dynamic TLS. Static TLS does not require this thread-storage backend.
+For `use-syscall`, disable default features and do not enable `std`.
 
 ## Contributing
 

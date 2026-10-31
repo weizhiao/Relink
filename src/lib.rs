@@ -156,7 +156,7 @@
 //!   [`Relocator::new`] remains eager until a binder is configured.
 //! - `object`: enables `LoaderRun::load_object` and relocatable object (`ET_REL`) loading.
 //! - `version`: enables version-aware `get_version` symbol lookups.
-//! - `libc`: enables libc platform services and host-library imports on Linux/glibc.
+//! - `std`: enables standard-library integration and host-library imports on Linux/glibc.
 //! - `log`, `portable-atomic`, and `use-syscall`: optional integrations for diagnostics and
 //!   specialized targets.
 //!
@@ -196,6 +196,11 @@
 )]
 extern crate alloc;
 
+#[cfg(all(feature = "use-syscall", feature = "std"))]
+compile_error!(
+    "use-syscall cannot be combined with std; disable default features for a syscall build"
+);
+
 /// Compile-time check for supported architectures
 #[cfg(not(any(
     target_arch = "x86_64",
@@ -218,7 +223,7 @@ pub mod elf;
 mod entity;
 pub mod error;
 mod hint;
-#[cfg(all(feature = "libc", target_os = "linux", target_env = "gnu"))]
+#[cfg(all(feature = "std", target_os = "linux", target_env = "gnu"))]
 pub mod host;
 pub mod image;
 pub mod input;

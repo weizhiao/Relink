@@ -106,7 +106,7 @@ fn observes_symbol_binding() {
 
     #[cfg(any(
         feature = "use-syscall",
-        all(any(target_os = "linux", target_os = "android"), feature = "libc")
+        all(any(target_os = "linux", target_os = "android"), feature = "std")
     ))]
     {
         let dependent = unsafe {

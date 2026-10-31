@@ -11,18 +11,12 @@ cfg_if::cfg_if! {
         mod syscall;
 
         pub use syscall::DefaultMmap;
-        pub(crate) use syscall::{
-            RawFile, current_thread_id, get_thread_local_ptr, getauxval, path_is_dir,
-            register_thread_destructor,
-        };
+        pub(crate) use syscall::{RawFile, getauxval, path_is_dir};
     } else {
-        mod libc;
+        mod hosted;
 
-        pub use libc::DefaultMmap;
-        pub(crate) use libc::{
-            RawFile, current_thread_id, get_thread_local_ptr, getauxval, path_is_dir,
-            register_thread_destructor,
-        };
+        pub use hosted::DefaultMmap;
+        pub(crate) use hosted::{RawFile, getauxval, path_is_dir};
     }
 }
 

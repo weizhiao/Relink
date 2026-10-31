@@ -5,6 +5,8 @@ compile_error!("the THP application benchmark requires Linux/glibc");
 #[path = "support/libraries.rs"]
 #[allow(dead_code)]
 mod libraries;
+#[path = "support/mappings.rs"]
+mod mappings;
 #[path = "support/python.rs"]
 mod python;
 
@@ -99,4 +101,7 @@ fn bench(
         });
     }
     group.finish();
+    // Snapshot actual backing while this interpreter and its module are alive.
+    // Reading smaps and the ELF file happens after all timed workloads.
+    mappings::report(backend, library, installation);
 }

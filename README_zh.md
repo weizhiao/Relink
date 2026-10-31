@@ -114,10 +114,10 @@ Xtensa 目前支持动态重定位，但尚不支持 lazy binding 和 TLS 相关
 
 ## Feature 开关
 
-默认 `full` 启用 `libc`、`object` 和 `lazy-binding`。最小 libc 配置：
+默认 `full` 启用 `std`、`object` 和 `lazy-binding`。最小宿主配置：
 
 ```toml
-elf_loader = { version = "0.18.0", default-features = false, features = ["libc"] }
+elf_loader = { version = "0.18.0", default-features = false, features = ["std"] }
 ```
 
 <details>
@@ -125,18 +125,21 @@ elf_loader = { version = "0.18.0", default-features = false, features = ["libc"]
 
 | Feature | 默认 | 作用 |
 | --- | --- | --- |
-| `libc` | 是 | 在 Linux/Android 上使用 libc 后端；在 Linux/glibc 上提供 `host::open` |
+| `std` | 是 | 启用标准库集成和默认线程存储；在 Linux/Android 上使用原生平台服务，在 Linux/glibc 上提供 `host::open` |
 | `lazy-binding` | 是 | 启用内置的本机 PLT/GOT lazy binder |
 | `object` | 是 | 启用可重定位目标文件（`ET_REL`）加载和 `LoaderRun::load_object()` |
 | `version` | 否 | 启用带符号版本的查找，例如 `get_version()` |
 | `log` | 否 | 启用基于 `log` 的加载与重定位诊断输出 |
 | `portable-atomic` | 否 | 为不支持原生指针宽度原子操作的目标提供支持 |
-| `use-syscall` | 否 | 在 Linux 上使用 syscall 后端，而不是 libc |
-| `full` | 是 | 便捷组合：`lazy-binding`、`object`、`libc` |
+| `use-syscall` | 否 | 使用 Linux syscall 后端；不能与 `std` 同时启用 |
+| `full` | 是 | 便捷组合：`lazy-binding`、`object`、`std` |
 
 </details>
 
 TLS 通过 resolver 配置，无需 feature 开关；宿主库需要显式导入，见[示例](examples/host_import.rs)。
+
+默认 resolver 的动态 TLS 需要 `std`；`no_std` 环境需提供自定义 resolver/provider。静态 TLS 不受此限制。
+使用 `use-syscall` 时，需禁用默认 feature，且不能启用 `std`。
 
 ## 参与贡献
 

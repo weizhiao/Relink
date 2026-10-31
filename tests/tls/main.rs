@@ -6,21 +6,12 @@ mod fixture_build;
 #[cfg(not(windows))]
 mod loading;
 
-#[cfg(any(
-    windows,
-    feature = "use-syscall",
-    all(any(target_os = "linux", target_os = "android"), feature = "libc")
-))]
+#[cfg(feature = "std")]
 mod relocation;
-#[cfg(any(
-    windows,
-    feature = "use-syscall",
-    all(any(target_os = "linux", target_os = "android"), feature = "libc")
-))]
+#[cfg(feature = "std")]
 mod support;
-#[cfg(any(
-    windows,
-    feature = "use-syscall",
-    all(any(target_os = "linux", target_os = "android"), feature = "libc")
-))]
+#[cfg(feature = "std")]
 mod thread;
+
+#[cfg(all(feature = "std", target_os = "linux", target_env = "gnu"))]
+mod destruction;

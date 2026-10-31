@@ -1,8 +1,8 @@
 use std::{fs, path::Path, sync::OnceLock};
 
-#[cfg(any(feature = "libc", feature = "use-syscall"))]
+#[cfg(any(feature = "std", feature = "use-syscall"))]
 use elf_loader::linker::SearchPathResolver;
-#[cfg(any(feature = "libc", feature = "use-syscall"))]
+#[cfg(any(feature = "std", feature = "use-syscall"))]
 use std::path::PathBuf;
 
 use crate::fixture_build::FixtureBuild;
@@ -15,20 +15,20 @@ pub(crate) struct Fixtures {
     pub(crate) nodelete: Vec<u8>,
     #[cfg(any(
         feature = "use-syscall",
-        all(any(target_os = "linux", target_os = "android"), feature = "libc")
+        all(any(target_os = "linux", target_os = "android"), feature = "std")
     ))]
     pub(crate) exec: Vec<u8>,
-    #[cfg(any(feature = "libc", feature = "use-syscall"))]
+    #[cfg(any(feature = "std", feature = "use-syscall"))]
     pub(crate) provider_path: PathBuf,
-    #[cfg(any(feature = "libc", feature = "use-syscall"))]
+    #[cfg(any(feature = "std", feature = "use-syscall"))]
     pub(crate) root_path: PathBuf,
-    #[cfg(any(feature = "libc", feature = "use-syscall"))]
+    #[cfg(any(feature = "std", feature = "use-syscall"))]
     pub(crate) rpath_root_path: PathBuf,
-    #[cfg(any(feature = "libc", feature = "use-syscall"))]
+    #[cfg(any(feature = "std", feature = "use-syscall"))]
     pub(crate) rpath_caller_path: PathBuf,
-    #[cfg(any(feature = "libc", feature = "use-syscall"))]
+    #[cfg(any(feature = "std", feature = "use-syscall"))]
     pub(crate) rpath_middle_path: PathBuf,
-    #[cfg(any(feature = "libc", feature = "use-syscall"))]
+    #[cfg(any(feature = "std", feature = "use-syscall"))]
     pub(crate) rpath_leaf_path: PathBuf,
 }
 
@@ -37,7 +37,7 @@ pub(crate) fn fixtures() -> &'static Fixtures {
     FIXTURES.get_or_init(build)
 }
 
-#[cfg(any(feature = "libc", feature = "use-syscall"))]
+#[cfg(any(feature = "std", feature = "use-syscall"))]
 pub(crate) fn search_path_resolver() -> SearchPathResolver {
     let mut resolver = SearchPathResolver::new();
     resolver.push_rpath();
@@ -69,10 +69,10 @@ fn build() -> Fixtures {
     let provider_path = dylib("provider", None);
     let dependent_path = dylib("dependent", Some(("provider", &provider_path)));
     let global_path = dylib("global", None);
-    #[cfg(any(feature = "libc", feature = "use-syscall"))]
+    #[cfg(any(feature = "std", feature = "use-syscall"))]
     let root_path = dylib("root", Some(("dependent", &dependent_path)));
 
-    #[cfg(any(feature = "libc", feature = "use-syscall"))]
+    #[cfg(any(feature = "std", feature = "use-syscall"))]
     let (rpath_root_path, rpath_caller_path, rpath_middle_path, rpath_leaf_path) = {
         let build = FixtureBuild::c("tests/linker/fixtures", "linker");
         let dir = build.output("rpath");
@@ -119,7 +119,7 @@ fn build() -> Fixtures {
 
     #[cfg(any(
         feature = "use-syscall",
-        all(any(target_os = "linux", target_os = "android"), feature = "libc")
+        all(any(target_os = "linux", target_os = "android"), feature = "std")
     ))]
     let exec = build.compile(
         "exec.rs",
@@ -160,20 +160,20 @@ fn build() -> Fixtures {
         nodelete: fs::read(nodelete).expect("failed to read linker NODELETE fixture"),
         #[cfg(any(
             feature = "use-syscall",
-            all(any(target_os = "linux", target_os = "android"), feature = "libc")
+            all(any(target_os = "linux", target_os = "android"), feature = "std")
         ))]
         exec: fs::read(exec).expect("failed to read linker executable fixture"),
-        #[cfg(any(feature = "libc", feature = "use-syscall"))]
+        #[cfg(any(feature = "std", feature = "use-syscall"))]
         provider_path,
-        #[cfg(any(feature = "libc", feature = "use-syscall"))]
+        #[cfg(any(feature = "std", feature = "use-syscall"))]
         root_path,
-        #[cfg(any(feature = "libc", feature = "use-syscall"))]
+        #[cfg(any(feature = "std", feature = "use-syscall"))]
         rpath_root_path,
-        #[cfg(any(feature = "libc", feature = "use-syscall"))]
+        #[cfg(any(feature = "std", feature = "use-syscall"))]
         rpath_caller_path,
-        #[cfg(any(feature = "libc", feature = "use-syscall"))]
+        #[cfg(any(feature = "std", feature = "use-syscall"))]
         rpath_middle_path,
-        #[cfg(any(feature = "libc", feature = "use-syscall"))]
+        #[cfg(any(feature = "std", feature = "use-syscall"))]
         rpath_leaf_path,
     }
 }

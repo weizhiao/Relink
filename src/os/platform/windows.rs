@@ -110,10 +110,6 @@ unsafe fn split_placeholder(addr: usize, len: usize) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn current_thread_id() -> usize {
-    unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() as usize }
-}
-
 fn wide_path(path: &Path) -> Vec<u16> {
     let mut wide: Vec<_> = {
         if let Ok(path_str) = str::from_utf8(path.as_bytes()) {
@@ -140,17 +136,6 @@ pub(crate) fn path_is_dir(path: &Path) -> bool {
     let path = wide_path(path);
     let attributes = unsafe { GetFileAttributesW(path.as_ptr()) };
     attributes != INVALID_FILE_ATTRIBUTES && attributes & FILE_ATTRIBUTE_DIRECTORY != 0
-}
-
-/// Registers a destructor (Stub for Windows)
-pub(crate) unsafe fn register_thread_destructor(
-    _destructor: unsafe extern "C" fn(*mut c_void),
-    _value: *mut c_void,
-) {
-}
-
-pub(crate) unsafe fn get_thread_local_ptr() -> *mut c_void {
-    null_mut()
 }
 
 pub(crate) struct RawFile {

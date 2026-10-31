@@ -1078,6 +1078,13 @@ impl Display for LinkerError {
 pub enum TlsError {
     /// The current resolver does not support the requested TLS operation.
     ResolverUnsupported,
+    /// Thread storage is being destroyed or already mutably borrowed.
+    ThreadStorageUnavailable,
+    /// The platform could not create or install thread-local storage.
+    ThreadStorageFailed {
+        /// Error code returned by the platform thread-storage operation.
+        code: i32,
+    },
     /// The TLS image source can no longer provide template bytes.
     TemplateUnavailable,
     /// The TLS module ID is not registered.
@@ -1096,6 +1103,12 @@ impl Display for TlsError {
         match self {
             Self::ResolverUnsupported => {
                 f.write_str("TLS operation is not supported by the configured resolver")
+            }
+            Self::ThreadStorageUnavailable => {
+                f.write_str("TLS thread storage is being destroyed or is already borrowed")
+            }
+            Self::ThreadStorageFailed { code } => {
+                write!(f, "TLS thread storage operation failed with error: {code}")
             }
             Self::TemplateUnavailable => f.write_str("TLS template image is no longer available"),
             Self::InvalidModuleId { mod_id } => {
@@ -1159,7 +1172,7 @@ pub struct DomainMismatchError {
 /// ELF file loading, parsing, and relocation operations.
 pub enum Error {
     /// An error occurred while importing a native host library.
-    #[cfg(all(feature = "libc", target_os = "linux", target_env = "gnu"))]
+    #[cfg(all(feature = "std", target_os = "linux", target_env = "gnu"))]
     Host(Box<crate::host::HostError>),
 
     /// Modules from incompatible runtime domains were combined.
@@ -1317,7 +1330,7 @@ impl Display for Error {
                 "runtime domain {} cannot be linked into runtime domain {}",
                 err.actual, err.expected
             ),
-            #[cfg(all(feature = "libc", target_os = "linux", target_env = "gnu"))]
+            #[cfg(all(feature = "std", target_os = "linux", target_env = "gnu"))]
             Self::Host(err) => write!(f, "Host library error: {err}"),
             Self::Io(err) => write!(f, "I/O error: {err}"),
             Self::Mmap(err) => write!(f, "Memory mapping error: {err}"),
@@ -1340,7 +1353,7 @@ impl core::error::Error for Error {
     #[inline]
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
-            #[cfg(all(feature = "libc", target_os = "linux", target_env = "gnu"))]
+            #[cfg(all(feature = "std", target_os = "linux", target_env = "gnu"))]
             Self::Host(error) => Some(error.as_ref()),
             Self::Custom(error) => core::error::Error::source(error),
             _ => None,

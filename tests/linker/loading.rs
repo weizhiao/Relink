@@ -9,7 +9,7 @@ struct LoadingFixtures {
     nodelete: &'static [u8],
     #[cfg(any(
         feature = "use-syscall",
-        all(any(target_os = "linux", target_os = "android"), feature = "libc")
+        all(any(target_os = "linux", target_os = "android"), feature = "std")
     ))]
     exec: &'static [u8],
     synthetic_root: ElfWriteOutput,
@@ -26,7 +26,7 @@ impl LoadingFixtures {
             nodelete: &real.nodelete,
             #[cfg(any(
                 feature = "use-syscall",
-                all(any(target_os = "linux", target_os = "android"), feature = "libc")
+                all(any(target_os = "linux", target_os = "android"), feature = "std")
             ))]
             exec: &real.exec,
             synthetic_root: DylibWriter::with_config(
@@ -835,7 +835,7 @@ fn publish_rejects_reloaded_root() {
 #[test]
 #[cfg(any(
     feature = "use-syscall",
-    all(any(target_os = "linux", target_os = "android"), feature = "libc")
+    all(any(target_os = "linux", target_os = "android"), feature = "std")
 ))]
 fn loads_dynamic_exec() {
     let fixtures = fixtures();

@@ -641,16 +641,16 @@ mod tests {
 
     fn install_elf(path: &StdPath) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let source = std::env::current_exe().unwrap();
-        if fs::hard_link(&source, path).is_err() {
-            fs::copy(source, path).unwrap();
-        }
+        let image = gen_elf::DylibWriter::new(gen_elf::Arch::current())
+            .write(&[], &[])
+            .unwrap();
+        fs::write(path, image.data).unwrap();
     }
 
     fn resolve_path(
         resolver: &SearchPathResolver,
         request: CandidateRequest<'_>,
-    ) -> Option<PathBuf> {
+    ) -> Option<std::path::PathBuf> {
         let req = ResolveRequest::dependency(
             request.requested().as_bytes(),
             request.owner(),
@@ -662,7 +662,9 @@ mod tests {
             .into_parts()
             .0
         {
-            ResolvedKind::Load { reader, .. } => Some(PathBuf::from(reader.path())),
+            ResolvedKind::Load { reader, .. } => Some(std::path::PathBuf::from(
+                core::str::from_utf8(reader.path().as_bytes()).unwrap(),
+            )),
             ResolvedKind::Module { .. } => None,
         }
     }
@@ -708,10 +710,7 @@ mod tests {
 
         assert!(resolve_path(&resolver, request).is_none());
         install_elf(&library);
-        assert_eq!(
-            resolve_path(&resolver, request).unwrap().as_bytes(),
-            library.as_os_str().as_encoded_bytes()
-        );
+        assert_eq!(resolve_path(&resolver, request).unwrap(), library);
     }
 
     #[test]
@@ -732,10 +731,7 @@ mod tests {
 
         assert!(resolve_path(&resolver, request).is_none());
         install_elf(&library);
-        assert_eq!(
-            resolve_path(&resolver, request).unwrap().as_bytes(),
-            library.as_os_str().as_encoded_bytes()
-        );
+        assert_eq!(resolve_path(&resolver, request).unwrap(), library);
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -758,10 +754,7 @@ mod tests {
 
         assert!(resolve_path(&resolver, request).is_none());
         install_elf(&library);
-        assert_eq!(
-            resolve_path(&resolver, request).unwrap().as_bytes(),
-            library.as_os_str().as_encoded_bytes()
-        );
+        assert_eq!(resolve_path(&resolver, request).unwrap(), library);
     }
 
     #[test]
@@ -780,10 +773,7 @@ mod tests {
         let mut resolver = SearchPathResolver::new();
         resolver.push_rpath();
 
-        assert_eq!(
-            resolve_path(&resolver, request).unwrap().as_bytes(),
-            expected.as_os_str().as_encoded_bytes()
-        );
+        assert_eq!(resolve_path(&resolver, request).unwrap(), expected);
     }
 
     #[test]
@@ -800,10 +790,7 @@ mod tests {
             CandidateRequest::new(Path::new("$ORIGIN/libvalue.so"), &owner, &tokens, &loaders);
         let resolver = SearchPathResolver::new();
 
-        assert_eq!(
-            resolve_path(&resolver, request).unwrap().as_bytes(),
-            expected.as_os_str().as_encoded_bytes()
-        );
+        assert_eq!(resolve_path(&resolver, request).unwrap(), expected);
     }
 
     #[test]
@@ -828,10 +815,7 @@ mod tests {
         let mut resolver = SearchPathResolver::new();
         resolver.push_runpath();
 
-        assert_eq!(
-            resolve_path(&resolver, request).unwrap().as_bytes(),
-            expected.as_os_str().as_encoded_bytes()
-        );
+        assert_eq!(resolve_path(&resolver, request).unwrap(), expected);
     }
 
     #[test]
@@ -855,10 +839,7 @@ mod tests {
         );
         let resolver = SearchPathResolver::new();
 
-        assert_eq!(
-            resolve_path(&resolver, request).unwrap().as_bytes(),
-            expected.as_os_str().as_encoded_bytes()
-        );
+        assert_eq!(resolve_path(&resolver, request).unwrap(), expected);
     }
 
     #[test]
@@ -895,7 +876,13 @@ mod tests {
         let run_candidate = run.join("libleaf.so");
         install_elf(&fixed_candidate);
         install_elf(&run_candidate);
-        let direct = module_search("/app/middle", None, Some(run.to_str().unwrap()), None);
+        let direct_path = base.join("middle");
+        let direct = module_search(
+            direct_path.to_str().unwrap(),
+            None,
+            Some("$ORIGIN/run"),
+            None,
+        );
         let root = module_search("/app/root", None, None, Some("/unused"));
         let chain = [&direct, &root];
         let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
@@ -905,16 +892,10 @@ mod tests {
         resolver.push_rpath();
         resolver.push_fixed_dir(fixed.to_str().unwrap());
         resolver.push_runpath();
-        assert_eq!(
-            resolve_path(&resolver, request).unwrap().as_bytes(),
-            fixed_candidate.as_os_str().as_encoded_bytes()
-        );
+        assert_eq!(resolve_path(&resolver, request).unwrap(), fixed_candidate);
 
         fs::remove_file(fixed_candidate).unwrap();
-        assert_eq!(
-            resolve_path(&resolver, request).unwrap().as_bytes(),
-            run_candidate.as_os_str().as_encoded_bytes()
-        );
+        assert_eq!(resolve_path(&resolver, request).unwrap(), run_candidate);
     }
 
     #[test]

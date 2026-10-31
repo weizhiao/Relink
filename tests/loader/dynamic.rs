@@ -1,6 +1,6 @@
 #[cfg(any(
     feature = "use-syscall",
-    all(any(target_os = "linux", target_os = "android"), feature = "libc")
+    all(any(target_os = "linux", target_os = "android"), feature = "std")
 ))]
 use elf_loader::{Error, error::ParseEhdrError};
 use elf_loader::{
@@ -92,7 +92,7 @@ fn loads_dylib() {
 #[test]
 #[cfg(any(
     feature = "use-syscall",
-    all(any(target_os = "linux", target_os = "android"), feature = "libc")
+    all(any(target_os = "linux", target_os = "android"), feature = "std")
 ))]
 fn loads_exec() {
     let bytes = crate::fixture::fixtures().exec.as_slice();
@@ -126,7 +126,7 @@ fn loads_exec() {
 #[test]
 #[cfg(any(
     feature = "use-syscall",
-    all(any(target_os = "linux", target_os = "android"), feature = "libc")
+    all(any(target_os = "linux", target_os = "android"), feature = "std")
 ))]
 fn loads_scanned_exec() {
     let ScannedElf::Dynamic(scanned) = LOADER

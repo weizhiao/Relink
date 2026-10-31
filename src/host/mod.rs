@@ -1,6 +1,6 @@
 //! Import libraries managed by the Linux/glibc loader into a Relink scope.
 //!
-//! Available with `libc` on Linux GNU targets; does not require `std`. Imports
+//! Available with `std` on Linux GNU targets. Imports
 //! retain the native handle and expose global/weak function, object and TLS
 //! exports, including GNU symbol versions. IFUNCs are resolved by glibc.
 //! Libraries are opened locally and are never added to a Relink scope implicitly.

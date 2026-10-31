@@ -5,9 +5,9 @@ The `library` suite requires Linux/glibc and libraries listed in `/etc/ld.so.cac
 ## THP application execution
 
 ```sh
-cargo bench --bench thp --features version
+cargo bench --bench thp --features std,version
 # Use the same available CPU for all three cases:
-taskset -c 0 cargo bench --bench thp --features version
+taskset -c 0 cargo bench --bench thp --features std,version
 ```
 
 Requires Linux/glibc and `python3` with a matching shared `libpython` and standard
@@ -33,6 +33,10 @@ loader runs in a fresh process with a fixed Python hash seed and no `site`
 customizations. Library paths, Python versions, input sizes, JSON accelerators,
 and result checksums are printed to make the cases comparable.
 
+Use the same feature set for before/after comparisons. `std` enables the
+standard-library thread-local cache and is included in the default `full` set.
+The `no_std + libc` configuration is no longer supported.
+
 Defaults are 1 s warmup, 5 s measurement, and 30 samples. Criterion options and
 workload filters are forwarded to all three workers, and results are written to
 `target/criterion/thp_python/`. For example, append `-- stdlib_compile` to run
@@ -42,6 +46,17 @@ This compares the loaders' own behavior: the harness does not force base pages,
 force THP promotion, change system policy, or rewrite/copy the library. The THP
 configuration is a request; whether the kernel supplies huge pages still depends
 on its policy and mapping state. Timings alone do not prove huge-page backing.
+After timing, each worker reports the library's `FilePmdMapped`, `AnonHugePages`
+and `ShmemPmdMapped` totals from `/proc/self/smaps`. VMAs extending beyond the
+library are counted separately because their counters cannot be attributed
+precisely. A zero total with no partial VMAs means no PMD huge-page backing was
+observed at that point.
+
+To isolate huge-page gains with another workload, compare the same THP-aligned
+layout with `HugePage` advice versus a custom `Mmap` that substitutes `NoHugePage`.
+Check backing before and after timing: file huge pages can remain in the shared
+page cache and affect later workers, including glibc. If an experiment uses
+explicit `MADV_COLLAPSE`, report its preparation time separately from execution.
 
 ## Fixed workloads
 

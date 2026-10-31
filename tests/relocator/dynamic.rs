@@ -38,7 +38,7 @@ fn pointer(image: &LoadedCore<()>, name: &str) -> VmAddr {
 
 #[cfg(any(
     feature = "use-syscall",
-    all(any(target_os = "linux", target_os = "android"), feature = "libc")
+    all(any(target_os = "linux", target_os = "android"), feature = "std")
 ))]
 fn call_pointer(image: &LoadedCore<()>, name: &str) -> VmAddr {
     let function = unsafe {
@@ -79,7 +79,7 @@ fn host_module() -> SyntheticModule {
 
 #[cfg(any(
     feature = "use-syscall",
-    all(any(target_os = "linux", target_os = "android"), feature = "libc")
+    all(any(target_os = "linux", target_os = "android"), feature = "std")
 ))]
 mod native {
     use super::*;
@@ -394,7 +394,6 @@ fn images_without_tls_retain_their_domain_at_admission() {
         fn publish(&self, _: TlsTemplate, _: TlsModuleId) -> Result<()> {
             Err(TlsError::ResolverUnsupported.into())
         }
-        fn unregister(&self, _: TlsModuleId) {}
         fn bind_tls_get_addr(&self) -> Result<VmAddr> {
             Ok(VmAddr::new(self.0))
         }

@@ -6,7 +6,7 @@ use crate::fixture_build::FixtureBuild;
 
 #[cfg(any(
     feature = "use-syscall",
-    all(any(target_os = "linux", target_os = "android"), feature = "libc")
+    all(any(target_os = "linux", target_os = "android"), feature = "std")
 ))]
 pub(crate) struct BindingFixtures {
     pub(crate) provider: Vec<u8>,
@@ -24,7 +24,7 @@ pub(crate) struct ScopeFixtures {
     not(target_arch = "loongarch64"),
     any(
         feature = "use-syscall",
-        all(any(target_os = "linux", target_os = "android"), feature = "libc")
+        all(any(target_os = "linux", target_os = "android"), feature = "std")
     )
 ))]
 pub(crate) struct CopyFixtures {
@@ -35,13 +35,13 @@ pub(crate) struct CopyFixtures {
 pub(crate) struct DynamicFixtures {
     #[cfg(any(
         feature = "use-syscall",
-        all(any(target_os = "linux", target_os = "android"), feature = "libc")
+        all(any(target_os = "linux", target_os = "android"), feature = "std")
     ))]
     pub(crate) binding: BindingFixtures,
     pub(crate) scope: ScopeFixtures,
     #[cfg(any(
         feature = "use-syscall",
-        all(any(target_os = "linux", target_os = "android"), feature = "libc")
+        all(any(target_os = "linux", target_os = "android"), feature = "std")
     ))]
     pub(crate) relative: Vec<u8>,
     pub(crate) weak: Vec<u8>,
@@ -49,13 +49,13 @@ pub(crate) struct DynamicFixtures {
         not(target_arch = "loongarch64"),
         any(
             feature = "use-syscall",
-            all(any(target_os = "linux", target_os = "android"), feature = "libc")
+            all(any(target_os = "linux", target_os = "android"), feature = "std")
         )
     ))]
     pub(crate) copy: CopyFixtures,
     #[cfg(any(
         feature = "use-syscall",
-        all(any(target_os = "linux", target_os = "android"), feature = "libc")
+        all(any(target_os = "linux", target_os = "android"), feature = "std")
     ))]
     pub(crate) ifunc: Vec<u8>,
 }
@@ -90,7 +90,7 @@ fn build_dynamic() -> DynamicFixtures {
 
     #[cfg(any(
         feature = "use-syscall",
-        all(any(target_os = "linux", target_os = "android"), feature = "libc")
+        all(any(target_os = "linux", target_os = "android"), feature = "std")
     ))]
     let binding = {
         let provider = build.c_shared(
@@ -136,7 +136,7 @@ fn build_dynamic() -> DynamicFixtures {
 
     #[cfg(any(
         feature = "use-syscall",
-        all(any(target_os = "linux", target_os = "android"), feature = "libc")
+        all(any(target_os = "linux", target_os = "android"), feature = "std")
     ))]
     let relative = read(
         build.c_shared("relative.c", "librelative.so", &[], |command| {
@@ -149,7 +149,7 @@ fn build_dynamic() -> DynamicFixtures {
 
     #[cfg(any(
         feature = "use-syscall",
-        all(any(target_os = "linux", target_os = "android"), feature = "libc")
+        all(any(target_os = "linux", target_os = "android"), feature = "std")
     ))]
     let ifunc = build.c_shared("ifunc.c", "libifunc.so", &[], |command| {
         command.arg("-Wl,-z,now");
@@ -159,7 +159,7 @@ fn build_dynamic() -> DynamicFixtures {
         not(target_arch = "loongarch64"),
         any(
             feature = "use-syscall",
-            all(any(target_os = "linux", target_os = "android"), feature = "libc")
+            all(any(target_os = "linux", target_os = "android"), feature = "std")
         )
     ))]
     let copy = {
@@ -194,7 +194,7 @@ fn build_dynamic() -> DynamicFixtures {
     DynamicFixtures {
         #[cfg(any(
             feature = "use-syscall",
-            all(any(target_os = "linux", target_os = "android"), feature = "libc")
+            all(any(target_os = "linux", target_os = "android"), feature = "std")
         ))]
         binding,
         scope: ScopeFixtures {
@@ -205,7 +205,7 @@ fn build_dynamic() -> DynamicFixtures {
         },
         #[cfg(any(
             feature = "use-syscall",
-            all(any(target_os = "linux", target_os = "android"), feature = "libc")
+            all(any(target_os = "linux", target_os = "android"), feature = "std")
         ))]
         relative,
         weak: read(weak),
@@ -213,13 +213,13 @@ fn build_dynamic() -> DynamicFixtures {
             not(target_arch = "loongarch64"),
             any(
                 feature = "use-syscall",
-                all(any(target_os = "linux", target_os = "android"), feature = "libc")
+                all(any(target_os = "linux", target_os = "android"), feature = "std")
             )
         ))]
         copy,
         #[cfg(any(
             feature = "use-syscall",
-            all(any(target_os = "linux", target_os = "android"), feature = "libc")
+            all(any(target_os = "linux", target_os = "android"), feature = "std")
         ))]
         ifunc: read(ifunc),
     }

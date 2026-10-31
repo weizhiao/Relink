@@ -3,17 +3,14 @@ use crate::{
     Result, TlsError,
     sync::{Arc, arc_unsize},
 };
-use alloc::{
-    collections::{BTreeMap, btree_map::Entry},
-    vec::Vec,
-};
+use alloc::vec::Vec;
 use core::{fmt, ptr::NonNull};
 
 /// Immutable metadata assigned to a provider by its registry.
 #[derive(Clone, Copy, Debug)]
 pub struct TlsContext {
-    pub(crate) info: TlsInfo,
-    pub(crate) binding: TlsBinding,
+    info: TlsInfo,
+    binding: TlsBinding,
 }
 
 impl TlsContext {
@@ -34,7 +31,7 @@ impl TlsContext {
 /// that lock: provider destruction may call back into the runtime. This handle
 /// does not keep the module ID registered.
 #[derive(Clone)]
-pub struct TlsOwner(pub(crate) Arc<dyn TlsProvider>);
+pub struct TlsOwner(Arc<dyn TlsProvider>);
 
 impl TlsOwner {
     /// Retains a provider independently of its lookup entry.
@@ -95,21 +92,22 @@ impl TlsRegistryEntry {
     }
 }
 
-/// Live module IDs used to discard stale per-thread blocks.
-#[derive(Clone, Debug)]
-pub struct TlsRegistrySnapshot {
-    /// Registry membership generation.
-    pub generation: usize,
-    /// All live module IDs in ascending order, without retaining their owners.
-    pub modules: Vec<TlsModuleId>,
+#[derive(Debug)]
+struct RegistrySlot {
+    id: TlsModuleId,
+    entry: Option<TlsRegistryEntry>,
 }
 
-/// Stores TLS providers under IDs that are never reused.
+/// Stores TLS providers in reusable slots under IDs that are never repeated.
+///
+/// The low half of each ID is a one-based slot; the high half is its incarnation.
+/// A slot is retired when its incarnation is exhausted, rather than wrapping.
+/// On 32-bit targets this allows 65,535 slots with 65,536 incarnations each.
 /// Clone an entry and release the registry lock before accessing its storage.
 #[derive(Debug)]
 pub struct TlsRegistry {
-    modules: BTreeMap<TlsModuleId, TlsRegistryEntry>,
-    next_id: usize,
+    slots: Vec<RegistrySlot>,
+    free_slots: Vec<usize>,
     generation: usize,
 }
 
@@ -117,8 +115,8 @@ impl TlsRegistry {
     /// Creates a registry; ID zero is reserved by the TLS ABI.
     pub const fn new() -> Self {
         Self {
-            modules: BTreeMap::new(),
-            next_id: 1,
+            slots: Vec::new(),
+            free_slots: Vec::new(),
             generation: 0,
         }
     }
@@ -145,72 +143,80 @@ impl TlsRegistry {
         owner: &TlsOwner,
     ) -> Result<TlsBinding> {
         info.validate()?;
-        let next_id = self
-            .next_id
-            .checked_add(1)
-            .ok_or(TlsError::ResolverUnsupported)?;
         let generation = self
             .generation
             .checked_add(1)
             .ok_or(TlsError::ResolverUnsupported)?;
-        let binding = TlsBinding::new(TlsModuleId::new(self.next_id), tp_offset);
-        self.modules.insert(
-            binding.mod_id(),
-            TlsRegistryEntry {
-                context: TlsContext { info, binding },
-                owner: owner.clone(),
-            },
-        );
-        self.next_id = next_id;
+        let index = if let Some(index) = self.free_slots.pop() {
+            index
+        } else {
+            let index = self.slots.len();
+            if index == TlsModuleId::SLOT_MASK {
+                return Err(TlsError::ResolverUnsupported.into());
+            }
+            self.slots.push(RegistrySlot {
+                id: TlsModuleId::new(index + 1),
+                entry: None,
+            });
+            index
+        };
+        let slot = &mut self.slots[index];
+        let binding = TlsBinding::new(slot.id, tp_offset);
+        slot.entry = Some(TlsRegistryEntry {
+            context: TlsContext { info, binding },
+            owner: owner.clone(),
+        });
         self.generation = generation;
         Ok(binding)
     }
 
     /// Detaches a registration. Drop its returned owner after releasing locks.
     pub fn unregister(&mut self, mod_id: TlsModuleId) -> Option<TlsOwner> {
-        let Entry::Occupied(entry) = self.modules.entry(mod_id) else {
+        let index = mod_id.slot()?;
+        let slot = self.slots.get_mut(index)?;
+        if slot.id != mod_id || slot.entry.is_none() {
             return None;
-        };
+        }
         // Finish fallible work before detaching an owner: unwinding must not
         // destroy a provider while the caller still holds the registry lock.
         let generation = self
             .generation
             .checked_add(1)
             .expect("TLS generation exhausted");
-        let entry = entry.remove();
+        if let Some(next_id) = mod_id.next_incarnation() {
+            // Grow the free list before detaching the owner, so allocation
+            // failure cannot destroy a provider while the registry is locked.
+            self.free_slots.push(index);
+            slot.id = next_id;
+        }
+        let entry = slot.entry.take().expect("checked occupied slot");
         self.generation = generation;
         Some(entry.owner)
     }
 
     /// Returns a bound entry for use after releasing the registry lock.
     pub fn lookup(&self, mod_id: TlsModuleId) -> Result<TlsRegistryEntry> {
-        self.modules
-            .get(&mod_id)
+        self.entry(mod_id)
             .cloned()
             .ok_or_else(|| TlsError::InvalidModuleId { mod_id }.into())
     }
 
     /// Returns whether the module is still registered.
     pub fn contains(&self, mod_id: TlsModuleId) -> bool {
-        self.modules.contains_key(&mod_id)
+        self.entry(mod_id).is_some()
     }
 
     /// Returns segment metadata for a live module.
     pub fn info(&self, mod_id: TlsModuleId) -> Option<TlsInfo> {
-        self.modules.get(&mod_id).map(TlsRegistryEntry::info)
+        self.entry(mod_id).map(TlsRegistryEntry::info)
     }
 
-    /// Returns live IDs only when registry membership changed.
-    pub fn snapshot_since(&self, generation: usize) -> Option<TlsRegistrySnapshot> {
-        (self.generation != generation).then(|| self.snapshot())
-    }
-
-    /// Returns all live IDs without retaining storage owners or templates.
-    pub fn snapshot(&self) -> TlsRegistrySnapshot {
-        TlsRegistrySnapshot {
-            generation: self.generation,
-            modules: self.modules.keys().copied().collect(),
+    fn entry(&self, mod_id: TlsModuleId) -> Option<&TlsRegistryEntry> {
+        let slot = self.slots.get(mod_id.slot()?)?;
+        if slot.id != mod_id {
+            return None;
         }
+        slot.entry.as_ref()
     }
 }
 
@@ -243,7 +249,7 @@ mod tests {
         assert_eq!(first_id.get(), 1);
 
         let generation = registry.generation();
-        assert!(registry.snapshot_since(generation).is_none());
+        assert!(registry.contains(first_id));
         assert!(registry.unregister(first_id).is_some());
         assert!(registry.generation() > generation);
         assert!(!registry.contains(first_id));

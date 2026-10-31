@@ -42,10 +42,6 @@ impl DefaultMmap {
     }
 }
 
-pub(crate) fn current_thread_id() -> usize {
-    unsafe { syscalls::raw_syscall!(Sysno::gettid) }
-}
-
 pub(crate) fn path_is_dir(path: &Path) -> bool {
     const AT_FDCWD: core::ffi::c_int = -100;
     const STATX_TYPE: u32 = 1;
@@ -71,16 +67,6 @@ pub(crate) fn path_is_dir(path: &Path) -> bool {
     }
     let stat = unsafe { stat.assume_init() };
     stat.mask & STATX_TYPE != 0 && stat.mode & S_IFMT == S_IFDIR
-}
-
-pub(crate) unsafe fn register_thread_destructor(
-    _destructor: unsafe extern "C" fn(*mut c_void),
-    _value: *mut c_void,
-) {
-}
-
-pub(crate) unsafe fn get_thread_local_ptr() -> *mut c_void {
-    core::ptr::null_mut()
 }
 
 #[inline]

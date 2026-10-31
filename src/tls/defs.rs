@@ -111,12 +111,31 @@ impl TlsDescBinding {
 /// TLS module ID assigned by a [`TlsResolver`](crate::tls::TlsResolver).
 ///
 /// ID 0 is reserved by the platform TLS ABI; dynamically loaded modules start
-/// at non-zero IDs.
+/// at non-zero IDs. The value is opaque outside its resolver's namespace.
+/// [`TlsRegistry`](crate::tls::TlsRegistry) encodes a slot and an incarnation;
+/// host and custom resolvers may use a different encoding.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct TlsModuleId(usize);
 
 impl TlsModuleId {
+    // The registry uses a one-based slot in the low half and its incarnation
+    // in the high half. Keep this private: other resolvers own their ID format.
+    const SLOT_BITS: u32 = usize::BITS / 2;
+    pub(super) const SLOT_MASK: usize = (1 << Self::SLOT_BITS) - 1;
+
+    #[inline]
+    pub(super) const fn slot(self) -> Option<usize> {
+        (self.0 & Self::SLOT_MASK).checked_sub(1)
+    }
+
+    pub(super) const fn next_incarnation(self) -> Option<Self> {
+        match self.0.checked_add(1 << Self::SLOT_BITS) {
+            Some(raw) => Some(Self(raw)),
+            None => None,
+        }
+    }
+
     /// The reserved module ID used when no TLS module is present.
     pub const RESERVED: Self = Self(0);
 

@@ -65,21 +65,30 @@ where
         let base = memory.base();
         let place = base + rel.r_offset();
         let r_addend = rel.read_addend(memory, place)?;
-        let mut effect = BindingEffect::default();
+
+        // Symbol zero refers to the current module. Undefined weak symbols leave
+        // ordinary TLS relocations untouched, but require an explicit TLSDESC.
+        let symbol = if r_sym == 0 {
+            None
+        } else {
+            match self.tls_symbol(rel) {
+                Ok(TlsSymbol::UndefinedWeak) if Arch::TLSDESC != Some(r_type) => {
+                    return Ok(TlsRelocOutcome::Applied);
+                }
+                Ok(symbol) => Some(symbol),
+                Err(reason) => return Ok(TlsRelocOutcome::Failed(reason)),
+            }
+        };
+        let (module, symbol_value, effect) = match &symbol {
+            Some(TlsSymbol::Defined(symbol)) => {
+                (Some(&symbol.module), symbol.offset, symbol.effect)
+            }
+            None => (self.core.tls(), 0, BindingEffect::default()),
+            Some(TlsSymbol::UndefinedWeak) => (None, 0, BindingEffect::default()),
+        };
 
         match r_type {
             value if Arch::DTPOFF == value => {
-                let symbol_value = if r_sym == 0 {
-                    0
-                } else {
-                    let symbol = match self.tls_symbol(rel) {
-                        Ok(TlsSymbol::Defined(symbol)) => symbol,
-                        Ok(TlsSymbol::UndefinedWeak) => return Ok(TlsRelocOutcome::Applied),
-                        Err(reason) => return Ok(TlsRelocOutcome::Failed(reason)),
-                    };
-                    effect = symbol.effect;
-                    symbol.offset
-                };
                 let tls_val = VmAddr::new(symbol_value)
                     .wrapping_add_signed(r_addend)
                     .get()
@@ -92,21 +101,10 @@ where
                 }
             }
             value if Arch::DTPMOD == Some(value) => {
-                let tls = if r_sym == 0 {
-                    self.core.tls().cloned()
-                } else {
-                    let symbol = match self.tls_symbol(rel) {
-                        Ok(TlsSymbol::Defined(symbol)) => symbol,
-                        Ok(TlsSymbol::UndefinedWeak) => return Ok(TlsRelocOutcome::Applied),
-                        Err(reason) => return Ok(TlsRelocOutcome::Failed(reason)),
-                    };
-                    effect = symbol.effect;
-                    Some(symbol.module)
-                };
-                let Some(tls) = tls else {
+                let Some(module) = module else {
                     return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsModuleId));
                 };
-                let mod_id = tls.mod_id();
+                let mod_id = module.mod_id();
                 unsafe {
                     memory.write_value(
                         place,
@@ -115,18 +113,7 @@ where
                 }
             }
             value if Arch::TPOFF == value => {
-                let (tls, symbol_value) = if r_sym == 0 {
-                    (self.core.tls().cloned(), 0)
-                } else {
-                    let symbol = match self.tls_symbol(rel) {
-                        Ok(TlsSymbol::Defined(symbol)) => symbol,
-                        Ok(TlsSymbol::UndefinedWeak) => return Ok(TlsRelocOutcome::Applied),
-                        Err(reason) => return Ok(TlsRelocOutcome::Failed(reason)),
-                    };
-                    effect = symbol.effect;
-                    (Some(symbol.module), symbol.offset)
-                };
-                let Some(tp_offset) = tls.as_ref().and_then(TlsModule::tp_offset) else {
+                let Some(tp_offset) = module.and_then(TlsModule::tp_offset) else {
                     return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsTpOffset));
                 };
                 let tls_val =
@@ -140,31 +127,19 @@ where
                 }
             }
             value if Arch::TLSDESC == Some(value) => {
-                let request = if r_sym == 0 {
-                    // By convention in ld.bfd and lld, an omitted symbol on a
-                    // TLS relocation is a reference to the current module.
-                    let Some(module) = self.core.tls().cloned() else {
+                let request = if matches!(symbol, Some(TlsSymbol::UndefinedWeak)) {
+                    TlsDescRequest::UndefinedWeak {
+                        addend: r_addend as usize,
+                    }
+                } else {
+                    let Some(module) = module else {
                         return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsModuleId));
                     };
                     TlsDescRequest::Defined {
-                        module,
-                        offset: VmAddr::new(0).wrapping_add_signed(r_addend).get(),
-                    }
-                } else {
-                    match self.tls_symbol(rel) {
-                        Err(reason) => return Ok(TlsRelocOutcome::Failed(reason)),
-                        Ok(TlsSymbol::UndefinedWeak) => TlsDescRequest::UndefinedWeak {
-                            addend: r_addend as usize,
-                        },
-                        Ok(TlsSymbol::Defined(symbol)) => {
-                            effect = symbol.effect;
-                            TlsDescRequest::Defined {
-                                module: symbol.module,
-                                offset: VmAddr::new(symbol.offset)
-                                    .wrapping_add_signed(r_addend)
-                                    .get(),
-                            }
-                        }
+                        module: module.clone(),
+                        offset: VmAddr::new(symbol_value)
+                            .wrapping_add_signed(r_addend)
+                            .get(),
                     }
                 };
                 let setup = self.core.tls_resolver().bind_tlsdesc(request)?;

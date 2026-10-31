@@ -37,7 +37,7 @@ pub(crate) fn gnu_hash(name: &[u8]) -> u32 {
     hash
 }
 
-#[cfg(all(feature = "libc", target_os = "linux", target_env = "gnu"))]
+#[cfg(all(feature = "std", target_os = "linux", target_env = "gnu"))]
 pub(crate) use gnu::ElfGnuHeader;
 mod gnu;
 mod sysv;

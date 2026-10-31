@@ -47,8 +47,9 @@ pub unsafe trait TlsProvider: Send + Sync + 'static {
     /// remain usable, or the operation must report unavailable storage.
     unsafe fn resolve(&self, context: &TlsContext, offset: usize) -> Result<NonNull<u8>>;
 
-    /// Queries an existing block without allocating TLS or creating thread state.
-    /// `None` also means that a non-allocating query is unsupported.
+    /// Queries an existing block without allocating a TLS block.
+    /// The storage backend may initialize thread-local lookup bookkeeping.
+    /// `None` also means that querying existing storage is unsupported.
     ///
     /// # Safety
     /// `context` must be the metadata assigned when this provider was registered.
@@ -70,6 +71,7 @@ pub trait TlsResolver<Arch: RelocationArch>: Clone + Send + Sync + 'static {
 
     /// Registers a TLS module with the requested placement and automatic cleanup.
     ///
+    /// The returned guard owns cleanup; drop it to unregister the module.
     /// The registration must use this resolver's namespace and
     /// [`Self::bind_tls_get_addr`] entry. On error, no new registration may remain.
     ///
@@ -82,10 +84,6 @@ pub trait TlsResolver<Arch: RelocationArch>: Clone + Send + Sync + 'static {
     /// `mod_id` must belong to this resolver, and its registration must remain alive
     /// throughout the call. Call at most once per registration; repetition may panic.
     fn publish(&self, source: TlsTemplate, mod_id: TlsModuleId) -> Result<()>;
-
-    /// Removes a registration during [`TlsRegistration`] cleanup.
-    /// Users should drop the registration owner rather than call this directly.
-    fn unregister(&self, mod_id: TlsModuleId);
 
     /// Returns the `__tls_get_addr` entry address in the target runtime.
     ///
@@ -151,10 +149,6 @@ impl<Arch: RelocationArch> TlsResolver<Arch> for () {
 
     fn publish(&self, _source: TlsTemplate, _mod_id: TlsModuleId) -> Result<()> {
         Err(TlsError::ResolverUnsupported.into())
-    }
-
-    fn unregister(&self, _mod_id: TlsModuleId) {
-        // No-op for unit resolver as it doesn't maintain any state
     }
 
     fn bind_tls_get_addr(&self) -> Result<VmAddr> {

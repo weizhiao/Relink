@@ -284,5 +284,5 @@ where
 
 mod loading;
 mod planning;
-#[cfg(all(not(windows), any(feature = "libc", feature = "use-syscall")))]
+#[cfg(all(not(windows), any(feature = "std", feature = "use-syscall")))]
 mod search_path;

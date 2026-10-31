@@ -4,8 +4,8 @@ use crate::{
     ByteRepr, Domain, Loader, Result,
     arch::NativeArch,
     elf::{
-        ElfDyn, ElfDynamicTag, ElfGnuHeader, ElfPhdr, ElfProgramType, ElfSymbol, ElfSymbolBind,
-        ElfSymbolType, ElfSymbolVisibility, abi, parse_dynamic_entries,
+        ElfDyn, ElfDynamicTag, ElfGnuHeader, ElfPhdr, ElfProgramType, ElfSymbol, ElfSymbolType,
+        abi, parse_dynamic_entries,
         version::{VerDef, VerDefAux},
     },
     image::{ModuleHandle, SyntheticModule, SyntheticSymbol},
@@ -120,10 +120,8 @@ fn import_symbol(
             SyntheticSymbol::function(name.as_c_str(), address.cast()).with_size(symbol.st_size())
         }
     }
-    .with_other(symbol.st_other());
-    if symbol.is_weak() {
-        export = export.with_bind(ElfSymbolBind::WEAK);
-    }
+    .with_other(symbol.st_other())
+    .with_bind(symbol.bind());
     if let Some(version) = version {
         export = export.with_version(version.name.to_bytes(), version.is_default);
     }
@@ -275,10 +273,7 @@ fn read_string(strings: &[u8], offset: usize) -> Result<CString> {
 }
 
 fn is_export(symbol: &ElfSymbol) -> bool {
-    matches!(
-        symbol.visibility(),
-        ElfSymbolVisibility::DEFAULT | ElfSymbolVisibility::PROTECTED
-    ) && matches!(symbol.bind(), ElfSymbolBind::GLOBAL | ElfSymbolBind::WEAK)
+    symbol.is_exported()
         && matches!(
             symbol.symbol_type(),
             ElfSymbolType::FUNC
@@ -286,5 +281,4 @@ fn is_export(symbol: &ElfSymbol) -> bool {
                 | ElfSymbolType::OBJECT
                 | ElfSymbolType::TLS
         )
-        && !symbol.is_undef()
 }

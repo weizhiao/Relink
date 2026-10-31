@@ -36,7 +36,7 @@ pub(crate) use symbol::SymbolInfo;
 pub use dynamic::{ElfDyn, ElfDynamicTag};
 /// Core ELF data types for program headers, relocations, and symbols.
 pub use ehdr::{ElfClass, ElfFileType, ElfHeader, ElfMachine, ElfTarget};
-#[cfg(all(feature = "libc", target_os = "linux", target_env = "gnu"))]
+#[cfg(all(feature = "std", target_os = "linux", target_env = "gnu"))]
 pub(crate) use hash::ElfGnuHeader;
 pub use hash::HashTable;
 pub use layout::{Elf32Layout, Elf64Layout, ElfDataEncoding, ElfLayout, NativeElfLayout};

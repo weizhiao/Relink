@@ -12,14 +12,20 @@ use elf_loader::{
 };
 use gen_elf::{
     Arch, DylibWriter, ElfWriteOutput, ElfWriterConfig, RelocEntry, RelocationInfo, SymbolDesc,
+    SymbolScope,
 };
 
 pub(crate) const FIRST: &str = "first";
 pub(crate) const SECOND: &str = "second";
+pub(crate) const WEAK: &str = "missing_weak";
 pub(crate) const DTPMOD: u32 = <NativeArch as RelocationArch>::DTPMOD.unwrap().raw();
 pub(crate) const DTPOFF: u32 = <NativeArch as RelocationArch>::DTPOFF.raw();
+pub(crate) const TPOFF: u32 = <NativeArch as RelocationArch>::TPOFF.raw();
 
 type TlsImage = LoadedCore<(), NativeArch, HostRegion, DefaultTlsResolver>;
+#[cfg(all(windows, target_arch = "x86_64"))]
+pub(crate) type TlsHelper = extern "sysv64" fn() -> *mut u32;
+#[cfg(not(all(windows, target_arch = "x86_64")))]
 pub(crate) type TlsHelper = extern "C" fn() -> *mut u32;
 
 pub(crate) struct TlsScenario {
@@ -93,10 +99,17 @@ fn load() -> TlsScenario {
                 RelocEntry::with_name(FIRST, DTPOFF),
                 RelocEntry::with_name(SECOND, DTPMOD),
                 RelocEntry::with_name(SECOND, DTPOFF),
+                RelocEntry::with_name(WEAK, DTPMOD),
+                RelocEntry::with_name(WEAK, DTPOFF),
+                RelocEntry::with_name(WEAK, TPOFF),
             ],
             &[
                 SymbolDesc::undefined_tls(FIRST),
                 SymbolDesc::undefined_tls(SECOND),
+                SymbolDesc {
+                    scope: SymbolScope::Weak,
+                    ..SymbolDesc::undefined_tls(WEAK)
+                },
             ],
         )
         .expect("failed to generate TLS consumer");

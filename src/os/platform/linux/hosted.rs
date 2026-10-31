@@ -4,23 +4,27 @@ use crate::{
     memory::{HostRegion, MappedRegion, VmAddr},
     os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags, SpaceInit, SpaceLayout},
 };
-use alloc::ffi::CString;
-use core::ffi::c_void;
-use core::mem::MaybeUninit;
-use core::sync::atomic::{AtomicUsize, Ordering};
-use libc::{_SC_PAGESIZE, O_RDONLY, madvise, mmap, mprotect, munmap, pread, sysconf};
+use libc::{_SC_PAGESIZE, madvise, mmap, mprotect, munmap, sysconf};
+use std::{
+    ffi::OsStr,
+    fs::File,
+    io,
+    os::{
+        fd::{AsRawFd, FromRawFd},
+        unix::{
+            ffi::OsStrExt,
+            fs::{FileExt, MetadataExt},
+        },
+    },
+};
 
 #[inline]
 fn last_os_error_code() -> u32 {
-    // bionic exposes __errno() rather than glibc's __errno_location().
-    #[cfg(target_os = "android")]
-    unsafe {
-        *libc::__errno() as u32
-    }
-    #[cfg(not(target_os = "android"))]
-    unsafe {
-        *libc::__errno_location() as u32
-    }
+    os_error_code(&io::Error::last_os_error())
+}
+
+fn os_error_code(error: &io::Error) -> u32 {
+    error.raw_os_error().unwrap_or(libc::EIO) as u32
 }
 
 #[inline]
@@ -29,12 +33,12 @@ pub(crate) fn getauxval(at: usize) -> usize {
     unsafe { libc::getauxval(at as libc::c_ulong) as usize }
 }
 
-/// Default libc-backed mapping backend for Linux builds.
+/// Default mapping backend for Linux/Android `std` builds.
 #[derive(Clone, Copy, Default)]
 pub struct DefaultMmap;
 
 impl DefaultMmap {
-    /// Creates the default libc-backed mmap implementation.
+    /// Creates the default hosted mmap implementation.
     #[inline]
     pub const fn new() -> Self {
         Self
@@ -67,63 +71,12 @@ impl DefaultMmap {
     }
 }
 
-pub(crate) fn current_thread_id() -> usize {
-    unsafe { libc::pthread_self() as usize }
-}
-
 pub(crate) fn path_is_dir(path: &Path) -> bool {
-    let Ok(path) = CString::new(path) else {
-        return false;
-    };
-    let mut stat = MaybeUninit::<libc::stat>::uninit();
-    if unsafe { libc::stat(path.as_ptr(), stat.as_mut_ptr()) } != 0 {
-        return false;
-    }
-    unsafe { stat.assume_init() }.st_mode & libc::S_IFMT == libc::S_IFDIR
-}
-
-static TLS_CLEANUP_KEY: AtomicUsize = AtomicUsize::new(0);
-
-/// Registers a destructor that will be called when the current thread exits.
-/// This is used to clean up thread-local storage and also sets the initial value.
-pub(crate) unsafe fn register_thread_destructor(
-    destructor: unsafe extern "C" fn(*mut c_void),
-    value: *mut c_void,
-) {
-    let mut key = TLS_CLEANUP_KEY.load(Ordering::Acquire);
-
-    // 1. Ensure the key is created
-    if key == 0 {
-        let mut new_key: libc::pthread_key_t = 0;
-        if unsafe { libc::pthread_key_create(&mut new_key, Some(destructor)) } == 0 {
-            let encoded = (new_key as usize).wrapping_add(1);
-            match TLS_CLEANUP_KEY.compare_exchange(0, encoded, Ordering::SeqCst, Ordering::SeqCst) {
-                Ok(_) => key = encoded,
-                Err(actual) => {
-                    unsafe { libc::pthread_key_delete(new_key) };
-                    key = actual;
-                }
-            }
-        }
-    }
-
-    // 2. Set thread-specific value to trigger destructor on exit
-    if key != 0 {
-        let actual_key = (key - 1) as libc::pthread_key_t;
-        unsafe { libc::pthread_setspecific(actual_key, value) };
-    }
-}
-
-pub(crate) unsafe fn get_thread_local_ptr() -> *mut c_void {
-    let key = TLS_CLEANUP_KEY.load(Ordering::Acquire);
-    if key == 0 {
-        return core::ptr::null_mut();
-    }
-    unsafe { libc::pthread_getspecific((key - 1) as libc::pthread_key_t) }
+    std::path::Path::new(OsStr::from_bytes(path.as_bytes())).is_dir()
 }
 
 pub(crate) struct RawFile {
-    fd: isize,
+    file: File,
 }
 
 impl Mmap for DefaultMmap {
@@ -218,72 +171,58 @@ impl Mmap for DefaultMmap {
     }
 }
 
-impl Drop for RawFile {
-    fn drop(&mut self) {
-        unsafe { libc::close(self.fd as i32) };
-    }
-}
-
 impl RawFile {
     pub(crate) fn from_path(path: &Path) -> Result<Self> {
-        let name = CString::new(path).map_err(|_| IoError::NullByteInPath)?;
-        let fd = unsafe { libc::open(name.as_ptr(), O_RDONLY) };
-        if fd == -1 {
-            return Err(IoError::OpenFailed {
-                path: path.as_bytes().into(),
-                code: last_os_error_code(),
-            }
-            .into());
+        if path.as_bytes().contains(&0) {
+            return Err(IoError::NullByteInPath.into());
         }
-        Self::from_owned_fd(fd as i32)
+        let file = File::open(OsStr::from_bytes(path.as_bytes())).map_err(|error| {
+            IoError::OpenFailed {
+                path: path.as_bytes().into(),
+                code: os_error_code(&error),
+            }
+        })?;
+        Ok(Self { file })
     }
 
     pub(crate) fn from_owned_fd(raw_fd: i32) -> Result<Self> {
+        // SAFETY: the caller transfers a valid, uniquely owned descriptor.
         Ok(Self {
-            fd: raw_fd as isize,
+            file: unsafe { File::from_raw_fd(raw_fd) },
         })
     }
 
     pub(crate) fn metadata(&self) -> Result<(usize, ModuleSourceId)> {
-        let fd = self.fd;
-        let mut stat = MaybeUninit::<libc::stat>::uninit();
-        if unsafe { libc::fstat(fd as i32, stat.as_mut_ptr()) } != 0 {
-            return Err(IoError::FileInfoFailed {
-                code: last_os_error_code(),
-            }
-            .into());
-        }
-        let stat = unsafe { stat.assume_init() };
-        let len = usize::try_from(stat.st_size).map_err(|_| IoError::ReadBufferTooLarge)?;
-        let source_id = ModuleSourceId::file(stat.st_dev as u64, stat.st_ino as u128);
+        let metadata = self
+            .file
+            .metadata()
+            .map_err(|error| IoError::FileInfoFailed {
+                code: os_error_code(&error),
+            })?;
+        let len = usize::try_from(metadata.len()).map_err(|_| IoError::ReadBufferTooLarge)?;
+        let source_id = ModuleSourceId::file(metadata.dev(), metadata.ino() as u128);
         Ok((len, source_id))
     }
-}
 
-impl RawFile {
     pub(crate) fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
         super::read_exact_at(buf, offset, |bytes, offset| {
-            let result = unsafe {
-                pread(
-                    self.fd as i32,
-                    bytes.as_mut_ptr() as *mut libc::c_void,
-                    bytes.len(),
-                    offset as _,
-                )
-            };
-
-            if result < 0 {
-                Err(IoError::ReadFailed {
-                    code: last_os_error_code(),
+            loop {
+                match self.file.read_at(bytes, offset as u64) {
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    result => {
+                        return result.map_err(|error| {
+                            IoError::ReadFailed {
+                                code: os_error_code(&error),
+                            }
+                            .into()
+                        });
+                    }
                 }
-                .into())
-            } else {
-                Ok(result as usize)
             }
         })
     }
 
     pub(crate) fn mapping_handle(&self) -> isize {
-        self.fd
+        self.file.as_raw_fd() as isize
     }
 }

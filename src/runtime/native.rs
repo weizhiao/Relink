@@ -51,7 +51,7 @@ unsafe fn resolve_native_ifunc(ptr: NonNull<u8>) -> Result<VmAddr> {
 #[cfg(all(
     target_arch = "arm",
     any(target_os = "linux", target_os = "android"),
-    any(feature = "libc", feature = "use-syscall")
+    any(feature = "std", feature = "use-syscall")
 ))]
 #[inline(always)]
 unsafe fn resolve_native_ifunc(ptr: NonNull<u8>) -> Result<VmAddr> {
@@ -66,7 +66,7 @@ unsafe fn resolve_native_ifunc(ptr: NonNull<u8>) -> Result<VmAddr> {
 #[cfg(all(
     target_arch = "aarch64",
     any(target_os = "linux", target_os = "android"),
-    any(feature = "libc", feature = "use-syscall")
+    any(feature = "std", feature = "use-syscall")
 ))]
 #[inline(always)]
 unsafe fn resolve_native_ifunc(ptr: NonNull<u8>) -> Result<VmAddr> {
@@ -101,7 +101,7 @@ unsafe fn resolve_native_ifunc(ptr: NonNull<u8>) -> Result<VmAddr> {
 #[cfg(all(
     any(target_arch = "riscv32", target_arch = "riscv64"),
     any(target_os = "linux", target_os = "android"),
-    any(feature = "libc", feature = "use-syscall")
+    any(feature = "std", feature = "use-syscall")
 ))]
 #[inline(always)]
 unsafe fn resolve_native_ifunc(ptr: NonNull<u8>) -> Result<VmAddr> {
@@ -117,7 +117,7 @@ unsafe fn resolve_native_ifunc(ptr: NonNull<u8>) -> Result<VmAddr> {
 #[cfg(all(
     any(target_arch = "riscv32", target_arch = "riscv64"),
     any(target_os = "linux", target_os = "android"),
-    any(feature = "libc", feature = "use-syscall")
+    any(feature = "std", feature = "use-syscall")
 ))]
 #[inline(always)]
 fn riscv_hwprobe() -> *mut core::ffi::c_void {
@@ -136,7 +136,7 @@ fn riscv_hwprobe() -> *mut core::ffi::c_void {
 #[cfg(all(
     target_arch = "loongarch64",
     any(target_os = "linux", target_os = "android"),
-    any(feature = "libc", feature = "use-syscall")
+    any(feature = "std", feature = "use-syscall")
 ))]
 #[inline(always)]
 unsafe fn resolve_native_ifunc(ptr: NonNull<u8>) -> Result<VmAddr> {
@@ -163,22 +163,22 @@ unsafe fn resolve_native_ifunc(ptr: NonNull<u8>) -> Result<VmAddr> {
     all(
         target_arch = "arm",
         any(target_os = "linux", target_os = "android"),
-        any(feature = "libc", feature = "use-syscall")
+        any(feature = "std", feature = "use-syscall")
     ),
     all(
         target_arch = "aarch64",
         any(target_os = "linux", target_os = "android"),
-        any(feature = "libc", feature = "use-syscall")
+        any(feature = "std", feature = "use-syscall")
     ),
     all(
         any(target_arch = "riscv32", target_arch = "riscv64"),
         any(target_os = "linux", target_os = "android"),
-        any(feature = "libc", feature = "use-syscall")
+        any(feature = "std", feature = "use-syscall")
     ),
     all(
         target_arch = "loongarch64",
         any(target_os = "linux", target_os = "android"),
-        any(feature = "libc", feature = "use-syscall")
+        any(feature = "std", feature = "use-syscall")
     ),
 )))]
 #[inline(always)]
