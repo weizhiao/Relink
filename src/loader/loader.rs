@@ -237,18 +237,23 @@ where
         self
     }
 
-    /// Configures transparent huge pages for eligible file-backed LOAD ranges.
+    /// Configures transparent huge pages for eligible file contents and anonymous BSS.
     ///
     /// No policy is configured by default, so no advice is sent. The policy
     /// applies after mapping to complete pages inside readable, non-writable
-    /// LOAD file contents. Copied inputs, section arenas, and borrowed mappings
-    /// are excluded. For overlapping LOADs, advice applies to the final mappings.
+    /// LOAD file contents. Writable anonymous BSS always receives `MADV_HUGEPAGE`,
+    /// including with [`ThpPolicy::Collapse`], before relocation and constructors.
+    /// Sparse BSS usage may increase resident memory. Copied inputs, section arenas,
+    /// and borrowed mappings are excluded. For overlapping LOADs, advice applies
+    /// to the final mappings.
     ///
     /// [`ThpPolicy::Advise`] and [`ThpPolicy::Collapse`] take a target page size
     /// appropriate for the backend; no system policy is probed. The size must be
     /// a power of two larger than the base page size; otherwise no advice or
     /// additional alignment is requested. These policies may increase image
-    /// alignment, without changing base page size, permissions, or relative layout.
+    /// alignment and choose a load bias that favors executable coverage, then
+    /// total read-only coverage, while preserving ELF alignment requirements.
+    /// Base page size, permissions, and relative segment layout are unchanged.
     /// The target size guides alignment and range selection; the kernel chooses
     /// the actual huge-page size.
     ///

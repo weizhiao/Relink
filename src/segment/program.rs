@@ -7,7 +7,7 @@ use crate::{
     segment::{ElfSegment, ElfSegments, SegmentContent, populate_segments, protect_segments},
 };
 
-use super::thp::FileThp;
+use super::thp::Thp;
 
 /// Convert ELF program header flags to memory protection flags
 #[inline]
@@ -46,11 +46,15 @@ where
         Some(range) => mapper.file_backing(range)?,
         None => None,
     };
-    let thp = FileThp::new(thp, file_backing, page_size);
-    let preferred_align = thp.as_ref().and_then(|thp| thp.preferred_alignment(phdrs));
-    let layout = parse_segments(phdrs, is_dylib, page_size, preferred_align)?;
+    let thp = Thp::new(thp, file_backing, page_size);
+    let mut layout = parse_segments(phdrs, is_dylib, page_size)?;
+    // The ELF image origin is independent of the mapping's alignment residue.
+    let min_vaddr = VmOffset::new(layout.offset);
+    if is_dylib && let Some(thp) = &thp {
+        thp.adjust_layout(phdrs, &mut layout);
+    }
     let mapped = if is_dylib && let Some(backing) = file_backing {
-        map_file_segments(phdrs, mapper, &layout, backing, page_size)?
+        map_file_segments(phdrs, mapper, &layout, min_vaddr, backing, page_size)?
     } else {
         None
     };
@@ -68,7 +72,6 @@ where
             (ProtFlags::PROT_WRITE, SpaceInit::Zeroed)
         };
         let region = unsafe { mapper.create_space(layout, prot, init) }?;
-        let min_vaddr = VmOffset::new(layout.offset);
         let base = region.addr() - min_vaddr;
         let loaded = ElfSegments::new(region, base, min_vaddr);
         populate_segments(mapper, object, &loaded, segments.clone(), file_backing)?;
@@ -91,6 +94,7 @@ fn map_file_segments<M: Mmap + ?Sized>(
     phdrs: &[ElfPhdr<impl ElfLayout>],
     mapper: &M,
     layout: &SpaceLayout,
+    min_vaddr: VmOffset,
     backing: FileBacking,
     page_size: usize,
 ) -> Result<Option<ElfSegments<M::Region>>> {
@@ -105,7 +109,7 @@ fn map_file_segments<M: Mmap + ?Sized>(
     }
     // The single middle-range protection below requires non-overlapping pages.
     // Other layouts still use the common reservation and segment-mapping path.
-    let mut end = layout.offset;
+    let mut end = min_vaddr.get();
     let mut last_start = end;
     let mut has_holes = false;
     let mut reuse_contiguous = true;
@@ -143,7 +147,6 @@ fn map_file_segments<M: Mmap + ?Sized>(
         Err(Error::Mmap(MmapError::FileMappingUnsupported)) => return Ok(None),
         Err(error) => return Err(error),
     };
-    let min_vaddr = VmOffset::new(layout.offset);
     let base = region.addr() - min_vaddr;
     let loaded = ElfSegments::new(region, base, min_vaddr);
     if has_holes {
@@ -159,7 +162,7 @@ fn map_file_segments<M: Mmap + ?Sized>(
 
     for (index, phdr) in loads.enumerate() {
         let segment = phdr.create_segment(page_size);
-        let relative = segment.offset.get() - layout.offset;
+        let relative = segment.offset.get() - min_vaddr.get();
         let mapped_prot = (index == 0
             || (reuse_contiguous
                 && initial_file_offset.checked_add(relative)
@@ -172,15 +175,11 @@ fn map_file_segments<M: Mmap + ?Sized>(
 
 /// Parses LOAD memory layout requirements, retaining the lowest page-aligned
 /// virtual address in `offset`.
-///
-/// `preferred_align`, when present, must be a power of two. It can raise shared-image
-/// alignment only after the ELF's own alignment requirements have been validated.
 #[inline]
 pub(crate) fn parse_segments(
     phdrs: &[ElfPhdr<impl ElfLayout>],
     is_dylib: bool,
     page_size: usize,
-    preferred_align: Option<usize>,
 ) -> Result<SpaceLayout> {
     let mut min_vaddr = usize::MAX;
     let mut max_vaddr = 0;
@@ -243,11 +242,7 @@ pub(crate) fn parse_segments(
             Some(VmAddr::new(min_vaddr))
         },
         len: total_size,
-        align: if is_dylib {
-            alignment.max(preferred_align.unwrap_or(alignment))
-        } else {
-            alignment
-        },
+        align: alignment,
         offset: min_vaddr,
     })
 }

@@ -1,38 +1,52 @@
 //! libclang's C API, resolved from the library under test.
-use elf_loader::image::Module as ElfModule;
-use libloading::os::unix::Library;
+use crate::symbols::Symbols;
+use elf_loader::{Loader, input::ElfFile};
 use std::{
-    ffi::{CStr, CString, c_char, c_int, c_uint, c_void},
+    ffi::{CString, c_char, c_int, c_uint, c_void},
     marker::PhantomData,
     os::unix::ffi::OsStrExt,
     path::PathBuf,
+    process::Command,
     ptr,
 };
 
 type Handle = *mut c_void;
 
-pub trait Symbols {
-    /// # Safety
-    /// `T` must match the named symbol's C ABI type.
-    unsafe fn symbol<T: Copy>(&self, name: &CStr) -> T;
-}
-
-impl Symbols for dyn ElfModule {
-    unsafe fn symbol<T: Copy>(&self, name: &CStr) -> T {
-        *unsafe { self.get::<T>(name.to_bytes()) }.unwrap().unwrap()
-    }
-}
-
-impl Symbols for Library {
-    unsafe fn symbol<T: Copy>(&self, name: &CStr) -> T {
-        *unsafe { self.get::<T>(name.to_bytes_with_nul()) }.unwrap()
-    }
-}
-
 pub fn library_path() -> PathBuf {
-    let path = std::env::var_os("LIBCLANG_LIBRARY")
-        .expect("set LIBCLANG_LIBRARY to the shared libclang library (see benches/README.md)");
-    std::fs::canonicalize(path).expect("LIBCLANG_LIBRARY does not name an existing file")
+    let output = Command::new("llvm-config")
+        .arg("--libdir")
+        .output()
+        .expect("the Clang benchmark requires llvm-config on PATH");
+    assert!(output.status.success(), "llvm-config --libdir failed");
+    let directory = String::from_utf8(output.stdout).expect("invalid LLVM library directory");
+    let mut candidates: Vec<_> = std::fs::read_dir(directory.trim())
+        .expect("cannot read the LLVM library directory")
+        .flatten()
+        .map(|entry| entry.path())
+        .filter_map(|path| {
+            // Accept the C API library, excluding libclang-cpp and compiler runtimes.
+            let name = path.file_name()?.to_str()?.strip_prefix("libclang")?;
+            let (version, suffix) = name.split_once(".so")?;
+            if !suffix.is_empty() && !suffix.starts_with('.') {
+                return None;
+            }
+            let version = if version.is_empty() {
+                u32::MAX // Prefer the installation's unversioned default.
+            } else {
+                version.strip_prefix('-')?.parse().ok()?
+            };
+            Some((version, path))
+        })
+        .collect();
+    candidates.sort_by(|a, b| b.cmp(a));
+    let loader = Loader::new();
+    candidates.into_iter().find_map(|(_, path)| {
+        let path = std::fs::canonicalize(path).ok()?;
+        let file =
+            ElfFile::from_path(elf_loader::input::Path::new(path.as_os_str().as_bytes())).ok()?;
+        loader.read_ehdr(&file).ok()?;
+        Some(path)
+    }).expect("cannot find native libclang in llvm-config --libdir; install the matching libclang shared library")
 }
 
 pub fn input_path() -> PathBuf {

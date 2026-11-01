@@ -60,21 +60,26 @@ impl PageSize {
     }
 }
 
-/// Transparent huge-page policy for directly mapped file contents.
+/// Transparent huge-page policy for file-mapped images, including anonymous BSS.
 ///
-/// Applies only to complete pages inside readable, non-writable `PT_LOAD`
-/// file ranges. Copied inputs, section arenas, and borrowed mappings are excluded.
-/// Advice is applied after mapping and final segment protections; failures are
-/// ignored. No policy requests reserved hugetlb pages.
+/// File advice applies to complete pages inside readable, non-writable `PT_LOAD`
+/// file ranges. Both policies also request `MADV_HUGEPAGE` for complete pages
+/// inside writable anonymous BSS before relocation and constructors. Sparse BSS
+/// usage may increase resident memory. Copied inputs, section arenas, borrowed
+/// mappings are excluded. For overlapping LOADs, advice applies to final mappings.
+/// Shared images choose a compatible load bias favoring executable coverage,
+/// then total read-only coverage. Advice is applied after mapping and final
+/// segment protections; failures are ignored. No policy requests reserved hugetlb pages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ThpPolicy {
-    /// Align eligible ranges to this page size and request `MADV_HUGEPAGE`.
+    /// Align eligible file ranges and request `MADV_HUGEPAGE` for files and BSS.
     /// Acceptance does not guarantee huge-page backing.
     Advise(PageSize),
-    /// Align eligible ranges and attempt synchronous `MADV_COLLAPSE`.
-    /// This can fault pages in and increase loading latency. It does not set a
-    /// persistent THP preference, and success does not guarantee future backing.
+    /// Align eligible file ranges and attempt synchronous `MADV_COLLAPSE` on them.
+    /// This can fault file pages in and increase loading latency. File collapse
+    /// does not set a persistent preference or guarantee future backing.
+    /// BSS receives `MADV_HUGEPAGE` only, without synchronous collapse.
     Collapse(PageSize),
 }
 
