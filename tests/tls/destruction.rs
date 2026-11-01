@@ -18,8 +18,6 @@ static FREED_BLOCKS: AtomicUsize = AtomicUsize::new(0);
 static VISIBLE_DURING_FREE: AtomicBool = AtomicBool::new(false);
 static VALUE_AT_EXIT: AtomicUsize = AtomicUsize::new(usize::MAX);
 static VALUE_IN_PTHREAD: AtomicUsize = AtomicUsize::new(usize::MAX);
-static LATE_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
-static RESURRECTED: AtomicBool = AtomicBool::new(false);
 static INIT_REENTRY: AtomicBool = AtomicBool::new(false);
 static VISIBLE_DURING_INIT: AtomicBool = AtomicBool::new(false);
 
@@ -66,8 +64,7 @@ unsafe impl GlobalAlloc for TrackingAllocator {
         {
             let mod_id = TlsModuleId::new(WATCHED_MODULE.load(Ordering::Acquire));
             VISIBLE_DURING_FREE.store(
-                DefaultTlsResolver::get_ptr_if_allocated(mod_id).is_some()
-                    || DefaultTlsResolver::get_ptr(mod_id).is_some(),
+                DefaultTlsResolver::get_ptr_if_allocated(mod_id).is_some(),
                 Ordering::Release,
             );
             FREED_BLOCKS.fetch_add(1, Ordering::Release);
@@ -102,36 +99,8 @@ std::thread_local! {
 fn dtv_outlives_earlier_host_tls_and_is_reclaimed_at_thread_exit() {
     let helper = scenario().helper(FIRST);
     let mod_id = scenario().provider().tls().unwrap().mod_id();
-    struct Cleanup {
-        read: Option<ReadOnExit>,
-        mod_id: TlsModuleId,
-        key: libc::pthread_key_t,
-        round: usize,
-    }
     unsafe extern "C" fn pthread_cleanup(pointer: *mut core::ffi::c_void) {
-        let mut cleanup = unsafe { Box::from_raw(pointer.cast::<Cleanup>()) };
-        if cleanup.round == 1 {
-            drop(cleanup.read.take());
-        } else {
-            // The DTV has now been reclaimed. Neither query nor allocating
-            // lookup may expose the old block or initialize a replacement.
-            LATE_CALLBACKS.fetch_add(1, Ordering::Release);
-            if DefaultTlsResolver::get_ptr_if_allocated(cleanup.mod_id).is_some()
-                || DefaultTlsResolver::get_ptr(cleanup.mod_id).is_some()
-            {
-                RESURRECTED.store(true, Ordering::Release);
-            }
-        }
-        if cleanup.round < 4 {
-            cleanup.round += 1;
-            let code = unsafe {
-                libc::pthread_setspecific(cleanup.key, ptr::from_mut(&mut *cleanup).cast())
-            };
-            if code != 0 {
-                std::process::abort();
-            }
-            let _ = Box::into_raw(cleanup);
-        }
+        unsafe { drop(Box::from_raw(pointer.cast::<ReadOnExit>())) };
     }
     // glibc visits this later-created key after the resolver's key in the first
     // destructor round, as can happen with a loaded Rust runtime's cleanup key.
@@ -154,15 +123,10 @@ fn dtv_outlives_earlier_host_tls_and_is_reclaimed_at_thread_exit() {
         let pointer = helper();
         unsafe { *pointer = 99 };
         WATCHED_BLOCK.store(pointer.cast(), Ordering::Release);
-        let mut cleanup = Box::new(Cleanup {
-            read: Some(ReadOnExit {
-                helper,
-                mod_id,
-                result: &VALUE_IN_PTHREAD,
-            }),
+        let mut cleanup = Box::new(ReadOnExit {
+            helper,
             mod_id,
-            key,
-            round: 1,
+            result: &VALUE_IN_PTHREAD,
         });
         assert_eq!(
             unsafe { libc::pthread_setspecific(key, ptr::from_mut(&mut *cleanup).cast()) },
@@ -179,8 +143,6 @@ fn dtv_outlives_earlier_host_tls_and_is_reclaimed_at_thread_exit() {
     assert_eq!(FREED_BLOCKS.load(Ordering::Acquire), 1);
     assert!(WATCHED_BLOCK.load(Ordering::Acquire).is_null());
     assert!(!VISIBLE_DURING_FREE.load(Ordering::Acquire));
-    assert_eq!(LATE_CALLBACKS.load(Ordering::Acquire), 3);
-    assert!(!RESURRECTED.load(Ordering::Acquire));
     assert!(INIT_REENTRY.load(Ordering::Acquire));
     assert!(!VISIBLE_DURING_INIT.load(Ordering::Acquire));
 }

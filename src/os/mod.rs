@@ -4,7 +4,7 @@
 //! memory mapping (`mmap`). It allows the ELF loader to be portable across
 //! different operating systems and bare-metal environments.
 
-pub use defs::{MadviseAdvice, MapFlags, PageSize, ProtFlags};
+pub use defs::{MadviseAdvice, MapFlags, PageSize, ProtFlags, ThpPolicy};
 pub use mmap::{AllocMmap, FixedMmap};
 pub use platform::DefaultMmap;
 pub(crate) use platform::*;

@@ -60,6 +60,24 @@ impl PageSize {
     }
 }
 
+/// Transparent huge-page policy for directly mapped file contents.
+///
+/// Applies only to complete pages inside readable, non-writable `PT_LOAD`
+/// file ranges. Copied inputs, section arenas, and borrowed mappings are excluded.
+/// Advice is applied after mapping and final segment protections; failures are
+/// ignored. No policy requests reserved hugetlb pages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ThpPolicy {
+    /// Align eligible ranges to this page size and request `MADV_HUGEPAGE`.
+    /// Acceptance does not guarantee huge-page backing.
+    Advise(PageSize),
+    /// Align eligible ranges and attempt synchronous `MADV_COLLAPSE`.
+    /// This can fault pages in and increase loading latency. It does not set a
+    /// persistent THP preference, and success does not guarantee future backing.
+    Collapse(PageSize),
+}
+
 bitflags! {
     #[derive(Clone, Copy, Debug, Default)]
     /// Memory protection flags for controlling access permissions.

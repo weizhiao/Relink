@@ -90,7 +90,9 @@ impl DefaultTlsResolver {
     /// teardown. No reference or aliasing guarantee is implied.
     ///
     /// # Panics
-    /// Panics if required managed thread storage cannot be installed.
+    /// Panics if required managed thread storage cannot be installed or has
+    /// already been destroyed during thread teardown, or if resolution reenters
+    /// a managed thread storage update.
     pub fn get_ptr(mod_id: TlsModuleId) -> Option<*mut u8> {
         get_dynamic(mod_id)
             .or_else(|| resolve_slow(mod_id, 0).ok())
@@ -221,7 +223,7 @@ fn get_or_init_dynamic(context: &TlsContext, image: &[u8]) -> Result<NonNull<u8>
             return Err(TlsError::InvalidModuleId { mod_id }.into());
         }
         dtv.get_or_init(mod_id, context.info(), image)
-    })?
+    })
 }
 
 #[inline]
@@ -243,8 +245,6 @@ fn get_dynamic_slow(mod_id: TlsModuleId) -> Option<NonNull<u8>> {
         with_registry(|registry| dtv.sync(registry));
         dtv.get(mod_id)
     })
-    .ok()
-    .flatten()
 }
 
 // Each entry uses the ABI of loaded ELF code, including on Windows.

@@ -1,118 +1,92 @@
 # Performance benchmarks
 
-The `library` suite requires Linux/glibc and libraries listed in `/etc/ld.so.cache`.
+Requires Linux/glibc. Use a fixed CPU affinity on an idle machine and regenerate
+baselines after harness changes.
 
-## THP application execution
+## THP execution
+
+Requires a shared libclang and a preprocessed simdjson 3.12.3 input. Use matching
+Clang/libclang versions (18.1.x was used in the selection experiment).
 
 ```sh
-cargo bench --bench thp --features std,version
-# Use the same available CPU for all three cases:
+CLANGXX=clang++-18 python3 benches/workloads/prepare_simdjson.py
+export LIBCLANG_LIBRARY=/path/to/libclang.so
+# Replace 0 with an available CPU.
 taskset -c 0 cargo bench --bench thp --features std,version
+cargo bench --bench thp --features std,version -- --test  # functional check
 ```
-
-Requires Linux/glibc and `python3` with a matching shared `libpython` and standard
-library (Python 3.10+). The benchmark discovers the installed library and compares
-exactly three ways of loading it:
 
 | Case | Loader |
 |---|---|
-| `relink` | `Loader::new()` |
-| `relink_thp` | `Loader::new().with_thp(...)`, using the kernel's PMD page size |
-| `glibc` | `libloading` / glibc `dlopen(RTLD_NOW \| RTLD_LOCAL)` |
+| `relink` | Default Relink |
+| `relink_thp` | Relink with synchronous `ThpPolicy::Collapse`, using the kernel's PMD size |
+| `glibc` | `libloading` with `RTLD_NOW \| RTLD_LOCAL` |
 
-All three execute the same tasks in `workloads/python.py`:
+Each case runs in a separate process, parsing and type-checking the same
+[preprocessed simdjson.cpp](workloads/README.md) through
+`clang_parseTranslationUnit2`, including function bodies. The parse call and its
+status check are timed, including warm-cache input reads. Library loading,
+collapse, index creation, diagnostic checks, AST traversal, and translation-unit
+teardown are excluded. This measures compiler frontend work, not JSON parsing.
+The input defaults to `target/thp-input/simdjson.ii`; override with `SIMDJSON_INPUT`.
 
-- **`stdlib_compile`:** compile nine real standard-library source files into
-  bytecode, without executing the modules or writing `.pyc` files.
-- **`json_roundtrip`:** decode and re-encode a JSON source-index document built
-  from those files and their metadata.
+Defaults: 1 s warmup, 5 s measurement, 30 samples. Criterion options are forwarded
+to all workers; results go to `target/criterion/thp_clang/`. Output groups timings
+and before/after libclang huge-page counts by case, then checks that all
+AST node counts and cursor-kind hashes match. Error diagnostics fail validation.
+These are structural sanity checks, not semantic-equivalence proofs. Compare
+runs using the same libclang and input.
 
-Only task execution and its result check are timed. Loading, interpreter startup,
-source-file I/O, preparation, warmup, and finalization are outside timing. Each
-loader runs in a fresh process with a fixed Python hash seed and no `site`
-customizations. Library paths, Python versions, input sizes, JSON accelerators,
-and result checksums are printed to make the cases comparable.
+The huge-page table reports MiB from `/proc/self/smaps`: `FilePmdMapped`,
+`AnonHugePages`, and `ShmemPmdMapped`. `Partial VMAs` overlap the image boundary
+and are excluded from counts. Zero counts with no partial VMAs mean no PMD huge
+pages were observed at those snapshots; dependencies and Clang's heap are excluded.
 
-Use the same feature set for before/after comparisons. `std` enables the
-standard-library thread-local cache and is included in the default `full` set.
-The `no_std + libc` configuration is no longer supported.
+Collapse failures do not abort loading. Check actual page counts: default loaders
+may also use THP, and collapse changes alignment as well as page backing. Separate
+processes still share the file cache, so timings alone do not isolate THP gains.
 
-Defaults are 1 s warmup, 5 s measurement, and 30 samples. Criterion options and
-workload filters are forwarded to all three workers, and results are written to
-`target/criterion/thp_python/`. For example, append `-- stdlib_compile` to run
-only compilation. `ci/bench.sh` continues to run the separate library suite.
-
-This compares the loaders' own behavior: the harness does not force base pages,
-force THP promotion, change system policy, or rewrite/copy the library. The THP
-configuration is a request; whether the kernel supplies huge pages still depends
-on its policy and mapping state. Timings alone do not prove huge-page backing.
-After timing, each worker reports the library's `FilePmdMapped`, `AnonHugePages`
-and `ShmemPmdMapped` totals from `/proc/self/smaps`. VMAs extending beyond the
-library are counted separately because their counters cannot be attributed
-precisely. A zero total with no partial VMAs means no PMD huge-page backing was
-observed at that point.
-
-To isolate huge-page gains with another workload, compare the same THP-aligned
-layout with `HugePage` advice versus a custom `Mmap` that substitutes `NoHugePage`.
-Check backing before and after timing: file huge pages can remain in the shared
-page cache and affect later workers, including glibc. If an experiment uses
-explicit `MADV_COLLAPSE`, report its preparation time separately from execution.
-
-## Fixed workloads
-
-Criterion uses this compiled-in suite, with no workload argument or environment
-override. The profiling runner accepts `--workload` separately:
-
-| Coverage | Libraries |
-|---|---|
-| Small and medium compression libraries | `libz.so.1`, `liblz4.so.1`, `libzstd.so.1` |
-| Parser, regular expressions and database | `libexpat.so.1`, `libpcre2-8.so.0`, `libsqlite3.so.0` |
-| Image/font dependency chains | `libpng16.so.16`, `libfreetype.so.6` |
-| Arithmetic exports, dependency chain and TLS relocations | `libgmp.so.10`, `libmpfr.so.6` |
-
-All libraries are required and must unload after `dlclose`; preflight rejects
-resident roots before sampling. CI installs their runtime packages; the run
-records resolved library paths and file hashes for reproducible comparisons.
-
-## CI comparison
-
-Compare Relink with `libloading` (`RTLD_NOW | RTLD_LOCAL`):
+## Library comparison
 
 ```sh
 bash ci/bench.sh
 bash ci/bench.sh --save-baseline before
 bash ci/bench.sh --baseline before
-```
-
-The suite measures load, teardown, and symbol lookup (hit/miss). Total has no
-separate sampling pass. Each case defaults to 1 s warmup, 2 s measurement and
-30 samples. Override with
-`RELINK_BENCH_WARMUP`, `RELINK_BENCH_DURATION` and `RELINK_BENCH_SAMPLES`.
-Criterion options are forwarded; avoid `--quiet` or filters that omit cases.
-Reports go to `target/benchmark-report/`, raw data to `target/criterion/`.
-
-To run only symbol lookup without generating the combined CI report:
-
-```sh
+# Symbol lookup only, without the combined CI report:
 cargo bench --bench library --features version -- symbol_lookup
 ```
 
-## Symbol lookup
+The fixed suite compares Relink with `libloading` (`RTLD_NOW | RTLD_LOCAL`).
+All libraries below must be available through `/etc/ld.so.cache` and unload after
+`dlclose`; preflight rejects resident roots. CI installs the runtime packages
+and records resolved paths and hashes.
 
-The `symbol_lookup` group compares Relink's `Module::get` with
-`libloading::Library::get` on already loaded libraries:
+| Coverage | Libraries |
+|---|---|
+| Compression | `libz.so.1`, `liblz4.so.1`, `libzstd.so.1` |
+| Parsing and database | `libexpat.so.1`, `libpcre2-8.so.0`, `libsqlite3.so.0` |
+| Images and fonts | `libpng16.so.16`, `libfreetype.so.6` |
+| Arithmetic and TLS | `libgmp.so.10`, `libmpfr.so.6` |
 
-- **Hit:** cycle through up to 32 names sampled evenly from sorted root exports.
-- **Miss:** cycle through the same number of generated absent names.
+Defaults: 1 s warmup, 2 s measurement, 30 samples. Override with
+`RELINK_BENCH_WARMUP`, `RELINK_BENCH_DURATION`, and `RELINK_BENCH_SAMPLES`.
+Criterion options are forwarded; avoid `--quiet` or filters that omit cases when
+using `ci/bench.sh`. Reports go to `target/benchmark-report/`, raw data to
+`target/criterion/`. This suite has no workload selector.
 
-Both outcomes are checked before timing. Names, library loading, context lookup,
-and unloading are outside timing; each measured iteration performs one lookup.
-Native names include a prepared NUL terminator. TLS and IFUNCs are excluded, and
-symbol addresses are never called or dereferenced. The report uses ns per lookup.
+- **Load:** library/dependency loading, relocation, and constructors.
+- **Teardown:** module release, finalizers, and unmapping. Relink context setup
+  and destruction, host imports, and cache setup are outside timing.
+- **Lookup:** one hit or miss per iteration on loaded libraries, reported in ns.
+  Hits sample up to 32 root exports; misses use absent names. TLS and IFUNCs are
+  excluded, and outcomes are checked before timing.
 
-These measure public API costs: Relink searches root exports, while native
-`dlsym` can search dependencies. Native misses also construct and drop a
-`libloading` error; Relink returns `Ok(None)`.
+These are warm-file-cache measurements. Native dependencies may remain resident;
+Relink modules retained until context destruction are cleaned up outside timing.
+Lookup measures public API costs: Relink searches root exports, while `dlsym`
+can search dependencies and native misses construct a `libloading` error.
+Criterion samples load and teardown independently; total has no separate pass.
+Old `load_unload` baselines are incompatible with the current `load_teardown` group.
 
 ## Relink profiling
 
@@ -125,26 +99,8 @@ perf record -e cpu-clock -F 999 --call-graph dwarf -- \
 perf report
 ```
 
-Defaults: `--warmup-ms 1000 --sample-ms 1000 --rounds 9`; `--iterations N`
-overrides calibration. Output includes average `load_ns`, `teardown_ns` and
-`total_ns` per iteration, plus P10/median/P90 across round averages.
-
-## Load and teardown timing
-
-Every Relink iteration uses a fresh context with fixed host runtimes:
-
-- **Load:** library/dependency loading, relocation and constructors.
-- **Teardown:** release and destruction of released modules, including finalizers and unmapping.
-
-Context creation/destruction, host imports and cache setup are excluded. The profiling runner
-also reports total as load + teardown from the same iteration, without extra sampling.
-
-These are warm-file-cache measurements. Native timing uses `dlopen`/`dlclose`;
-its namespace persists and dependencies may remain resident. Roots retained by
-`NODELETE` or GNU-unique bindings are unsuitable for this suite. Relink measures
-release; any modules retained until context destruction are cleaned up outside timing.
-
-Criterion samples load and teardown independently. `perf` also captures preparation
-outside timed regions.
-Compare on an idle machine with the same CPU affinity. Regenerate baselines after
-harness changes, including the exclusion of context destruction from teardown; the current `load_teardown` group differs from old `load_unload` results.
+The profiling runner accepts `--workload`. Defaults are `--warmup-ms 1000`,
+`--sample-ms 1000`, and `--rounds 9`; `--iterations N` overrides calibration. Output
+includes average load, teardown, and their sum in ns per iteration, plus
+P10/median/P90 across round averages. `perf` also captures preparation outside
+timed regions.

@@ -3,7 +3,7 @@ use crate::{
     elf::{ElfLayout, ElfPhdr, ElfProgramFlags, ElfProgramType},
     input::{ElfReader, FileBacking, check_read_range},
     memory::{VmAddr, VmOffset, rounddown, roundup},
-    os::{Mmap, PageSize, ProtFlags, SpaceInit, SpaceLayout},
+    os::{Mmap, ProtFlags, SpaceInit, SpaceLayout, ThpPolicy},
     segment::{ElfSegment, ElfSegments, SegmentContent, populate_segments, protect_segments},
 };
 
@@ -32,7 +32,7 @@ pub(crate) fn load_segments<M>(
     mapper: &M,
     object: &impl ElfReader,
     page_size: usize,
-    thp: Option<PageSize>,
+    thp: Option<ThpPolicy>,
 ) -> Result<ElfSegments<M::Region>>
 where
     M: Mmap + ?Sized,

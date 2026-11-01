@@ -3,7 +3,7 @@ use crate::{
     MmapError, Result,
     arch::NativeArch,
     const_builder::NoDrop,
-    os::{DefaultMmap, Mmap, PageSize},
+    os::{DefaultMmap, Mmap, PageSize, ThpPolicy},
     relocation::RelocationArch,
     runtime::Domain,
     tls::TlsResolver,
@@ -39,7 +39,7 @@ where
 {
     mapper: M,
     page_size: Option<PageSize>,
-    thp: Option<PageSize>,
+    thp: Option<ThpPolicy>,
     force_static_tls: bool,
     _marker: PhantomData<fn() -> (D, Arch)>,
 }
@@ -55,7 +55,7 @@ where
 struct LoaderFields<M> {
     mapper: NoDrop<M>,
     page_size: Option<PageSize>,
-    thp: Option<PageSize>,
+    thp: Option<ThpPolicy>,
     force_static_tls: bool,
 }
 
@@ -116,7 +116,6 @@ where
     fn clone(&self) -> Self {
         Self {
             mapper: self.mapper.clone(),
-
             page_size: self.page_size,
             thp: self.thp,
             force_static_tls: self.force_static_tls,
@@ -132,7 +131,6 @@ impl Loader<(), NativeArch, DefaultMmap> {
     pub const fn new() -> Self {
         Self {
             mapper: DefaultMmap::new(),
-
             page_size: None,
             thp: None,
             force_static_tls: false,
@@ -180,7 +178,7 @@ where
     }
 
     #[inline]
-    pub(super) const fn thp(&self) -> Option<PageSize> {
+    pub(super) const fn thp(&self) -> Option<ThpPolicy> {
         self.thp
     }
 
@@ -241,28 +239,30 @@ where
 
     /// Configures transparent huge pages for eligible file-backed LOAD ranges.
     ///
-    /// Disabled by default. The caller supplies a target huge-page size appropriate
-    /// for the mapping backend; no system policy is probed. This may increase
-    /// shared-image address alignment and sends `MADV_HUGEPAGE` for eligible ranges
-    /// after mapping. The base page size, segment permissions, and relative layout
-    /// stay unchanged. Candidates come from readable, non-writable LOAD headers;
-    /// copied inputs, section arenas, and borrowed mappings are outside this policy.
-    /// For overlapping LOAD segments, advice applies to the final mappings.
+    /// No policy is configured by default, so no advice is sent. The policy
+    /// applies after mapping to complete pages inside readable, non-writable
+    /// LOAD file contents. Copied inputs, section arenas, and borrowed mappings
+    /// are excluded. For overlapping LOADs, advice applies to the final mappings.
     ///
-    /// The size must be a power of two larger than the base page size; other
-    /// values disable this optimization. This does not request reserved hugetlb pages.
+    /// [`ThpPolicy::Advise`] and [`ThpPolicy::Collapse`] take a target page size
+    /// appropriate for the backend; no system policy is probed. The size must be
+    /// a power of two larger than the base page size; otherwise no advice or
+    /// additional alignment is requested. These policies may increase image
+    /// alignment, without changing base page size, permissions, or relative layout.
+    /// The target size guides alignment and range selection; the kernel chooses
+    /// the actual huge-page size.
     ///
-    /// Mapping failures, including failure to satisfy the increased alignment,
-    /// are returned without retrying at a smaller alignment. Advice failures do
-    /// not fail a load, and success does not guarantee huge pages.
+    /// Mapping failures, including failure to satisfy increased alignment, are
+    /// returned without retrying at a smaller alignment. Advice failures do not
+    /// fail a load. See [`ThpPolicy`] for the effects of each policy.
     ///
     /// ```
-    /// use elf_loader::{Loader, os::PageSize};
+    /// use elf_loader::{Loader, os::{PageSize, ThpPolicy}};
     ///
-    /// let loader = Loader::new().with_thp(PageSize::Huge2MiB);
+    /// let loader = Loader::new().with_thp(ThpPolicy::Advise(PageSize::Huge2MiB));
     /// ```
-    pub const fn with_thp(mut self, page_size: PageSize) -> Self {
-        self.thp = Some(page_size);
+    pub const fn with_thp(mut self, policy: ThpPolicy) -> Self {
+        self.thp = Some(policy);
         self
     }
 

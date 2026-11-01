@@ -1,62 +1,68 @@
-//! Read-only snapshots of huge pages backing the benchmark's libpython instance.
-use super::python::{Installation, Symbols};
+//! Read-only snapshots of huge pages backing the benchmark's libclang instance.
 use object::{Object, ObjectSegment, ObjectSymbol};
-use std::{ffi::c_char, ops::Range};
+use std::{ops::Range, path::Path};
 
-pub fn report(backend: &str, library: &(impl Symbols + ?Sized), installation: &Installation) {
-    match snapshot(library, installation) {
-        Ok(pages) => eprintln!(
-            "python_pages\t{backend}\tphase=after_bench\tfile_pmd_kib={}\tanon_huge_kib={}\tshmem_pmd_kib={}\tpartial_vmas={}",
-            pages.file_pmd, pages.anon_huge, pages.shmem_pmd, pages.partial_vmas
-        ),
-        Err(error) => eprintln!("python_pages\t{backend}\tunavailable={error}"),
+type Snapshot = Result<Pages, Box<dyn std::error::Error>>;
+
+pub fn report(before: Snapshot, after: Snapshot) {
+    eprintln!("libclang huge pages (MiB; partial VMAs are excluded from counts):");
+    eprintln!(
+        "  {:<10} {:>10} {:>10} {:>10} {:>13}",
+        "Snapshot", "File", "Anonymous", "Shmem", "Partial VMAs"
+    );
+    for (phase, snapshot) in [("Before", before), ("After", after)] {
+        match snapshot {
+            Ok(pages) => eprintln!(
+                "  {phase:<10} {:>10.1} {:>10.1} {:>10.1} {:>13}",
+                pages.file_pmd as f64 / 1024.0,
+                pages.anon_huge as f64 / 1024.0,
+                pages.shmem_pmd as f64 / 1024.0,
+                pages.partial_vmas,
+            ),
+            Err(error) => eprintln!("  {phase:<10} unavailable: {error}"),
+        }
     }
 }
 
 #[derive(Default)]
-struct Pages {
+pub struct Pages {
     file_pmd: usize,
     anon_huge: usize,
     shmem_pmd: usize,
     partial_vmas: usize,
 }
 
-fn snapshot(
-    library: &(impl Symbols + ?Sized),
-    installation: &Installation,
-) -> Result<Pages, Box<dyn std::error::Error>> {
-    let bytes = std::fs::read(&installation.library)?;
+pub fn snapshot(library: &Path, anchor: usize) -> Snapshot {
+    let bytes = std::fs::read(library)?;
     let elf = object::File::parse(bytes.as_slice())?;
     let symbol = elf
         .dynamic_symbols()
-        .find(|symbol| symbol.is_definition() && symbol.name() == Ok("Py_GetVersion"))
-        .ok_or("Py_GetVersion is missing from the dynamic symbol table")?;
-    // SAFETY: Py_GetVersion has this documented CPython C ABI signature; the
-    // loaded library is still alive. Only its address is used here.
-    let version: unsafe extern "C" fn() -> *const c_char =
-        unsafe { library.symbol(c"Py_GetVersion") };
-    let base = (version as usize)
+        .find(|symbol| symbol.is_definition() && symbol.name() == Ok("clang_parseTranslationUnit2"))
+        .ok_or("clang_parseTranslationUnit2 is missing from the dynamic symbol table")?;
+    let base = anchor
         .checked_sub(usize::try_from(symbol.address())?)
-        .ok_or("invalid libpython load address")?;
+        .ok_or("invalid libclang load address")?;
     // SAFETY: sysconf has no memory or ownership preconditions.
     let page_size = usize::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) })?;
     if !page_size.is_power_of_two() {
         return Err("invalid system page size".into());
     }
-    let mut image = usize::MAX..0;
+    let mut image_start = usize::MAX;
+    let mut image_end = 0;
     for segment in elf.segments() {
         let start = base
             .checked_add(usize::try_from(segment.address())?)
-            .ok_or("libpython segment address overflow")?;
+            .ok_or("libclang segment address overflow")?;
         let end = start
             .checked_add(usize::try_from(segment.size())?)
             .and_then(|end| end.checked_add(page_size - 1))
-            .ok_or("libpython segment end overflow")?;
-        image.start = image.start.min(start & !(page_size - 1));
-        image.end = image.end.max(end & !(page_size - 1));
+            .ok_or("libclang segment end overflow")?;
+        image_start = image_start.min(start & !(page_size - 1));
+        image_end = image_end.max(end & !(page_size - 1));
     }
+    let image = image_start..image_end;
     if image.is_empty() {
-        return Err("libpython has no load segments".into());
+        return Err("libclang has no load segments".into());
     }
 
     let smaps = std::fs::read_to_string("/proc/self/smaps")?;
@@ -88,7 +94,7 @@ fn snapshot(
         }
     }
     if !matched {
-        return Err("libpython mappings are missing from smaps".into());
+        return Err("libclang mappings are missing from smaps".into());
     }
     Ok(pages)
 }

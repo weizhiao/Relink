@@ -10,6 +10,8 @@
 //! Default managed dynamic TLS requires `std`.
 //! Other environments must supply a [`TlsResolver`] with their own thread lifecycle.
 //! Static TLS and custom providers do not require the default thread storage.
+//! On Linux/Android, managed blocks are reclaimed in the second pthread destructor
+//! round; accessing managed TLS after that reclamation is unsupported.
 //!
 //! Recursive creation of managed dynamic TLS from allocator callbacks is not
 //! supported. Existing DTV updates temporarily make managed queries unavailable
