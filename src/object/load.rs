@@ -76,7 +76,7 @@ where
         let mut user_data = D::default();
         let path = PathBuf::from(object.path());
         let source_id = object.source_id();
-        let page_size = self.loader.page_size()?.bytes();
+        let page_size = self.loader.mapper().page_size().bytes();
         let object_groups = Arc::clone(&self.object_groups);
         let observer = &mut self.observer;
         let mapper = self.loader.mapper();
@@ -129,9 +129,8 @@ fn read_section_name_table<L: ElfLayout>(
     shdrs: &[ElfShdr<L>],
     object: &impl ElfReader,
 ) -> Result<alloc::vec::Vec<u8>> {
-    let shstrtab = shdrs
-        .get(ehdr.e_shstrndx())
-        .ok_or_else(|| ParseShdrError::malformed("e_shstrndx is out of range"))?;
+    // validate_object_shdrs has already checked this index.
+    let shstrtab = &shdrs[ehdr.e_shstrndx()];
     object.read_to_vec(shstrtab.sh_offset(), shstrtab.sh_size())
 }
 
@@ -143,7 +142,7 @@ fn validate_object_shdrs<Arch>(
 where
     Arch: ObjectArch,
 {
-    let first = shdrs.first().ok_or(ParseShdrError::MissingSectionHeaders)?;
+    let first = &shdrs[0];
     if first.section_type() != ElfSectionType::NULL || first.sh_size() != 0 {
         return Err(
             ParseShdrError::malformed("section 0 must be an empty SHT_NULL section").into(),

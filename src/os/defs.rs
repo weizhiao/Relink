@@ -60,27 +60,34 @@ impl PageSize {
     }
 }
 
-/// Transparent huge-page policy for file-mapped images, including anonymous BSS.
+/// Transparent huge-page policy for mapped or copied ELF images.
 ///
-/// File advice applies to complete pages inside readable, non-writable `PT_LOAD`
+/// File advice applies to complete pages inside non-writable `PT_LOAD`
 /// file ranges. Both policies also request `MADV_HUGEPAGE` for complete pages
-/// inside writable anonymous BSS before relocation and constructors. Sparse BSS
-/// usage may increase resident memory. Copied inputs, section arenas, borrowed
-/// mappings are excluded. For overlapping LOADs, advice applies to final mappings.
-/// Shared images choose a compatible load bias favoring executable coverage,
-/// then total read-only coverage. Advice is applied after mapping and final
-/// segment protections; failures are ignored. No policy requests reserved hugetlb pages.
+/// inside writable anonymous BSS before relocation and constructors.
+/// Copied inputs receive `MADV_HUGEPAGE` across complete pages in all LOADs before
+/// copying; `Collapse` additionally collapses initialized contents while the
+/// destination is still writable, before final segment protections.
+/// Sparse usage may increase resident memory. Section arenas and borrowed mappings
+/// are excluded. File mappings receive advice after all mapping replacements and
+/// segment protections. Shared images request compatible huge-page alignment;
+/// file mappings favor executable coverage, then total non-writable coverage.
+/// Advice failures are ignored. No policy requests reserved hugetlb pages.
+/// The mapping backend supplies the target size via [`super::Mmap::thp_page_size`];
+/// if unavailable, the loader skips THP alignment and advice. Linux's default
+/// backend reads and caches the kernel's PMD huge-page size from sysfs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ThpPolicy {
-    /// Align eligible file ranges and request `MADV_HUGEPAGE` for files and BSS.
+    /// Align eligible ranges and request `MADV_HUGEPAGE`.
     /// Acceptance does not guarantee huge-page backing.
-    Advise(PageSize),
-    /// Align eligible file ranges and attempt synchronous `MADV_COLLAPSE` on them.
-    /// This can fault file pages in and increase loading latency. File collapse
-    /// does not set a persistent preference or guarantee future backing.
-    /// BSS receives `MADV_HUGEPAGE` only, without synchronous collapse.
-    Collapse(PageSize),
+    Advise,
+    /// Align eligible initialized ranges and attempt synchronous `MADV_COLLAPSE`.
+    /// This can fault pages in and increase loading latency. File collapse does
+    /// not set a persistent preference or guarantee future backing. Copied inputs
+    /// also receive `MADV_HUGEPAGE` before copying. BSS receives only that advice,
+    /// without synchronous collapse.
+    Collapse,
 }
 
 bitflags! {
@@ -163,6 +170,7 @@ impl MapFlags {
 ///
 /// TODO some of these values are incorrect for alpha, mips, parisc, and xtensa arches.
 #[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub enum MadviseAdvice {
     /// No special treatment.
     Normal = 0,

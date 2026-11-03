@@ -121,9 +121,8 @@ impl<R: RegionAccess> RuntimeModuleMemory<R> {
         index: usize,
     ) -> Result<VmAddr> {
         let section_addr = self.section_addr(section_id)?;
-        let offset = index.checked_mul(size_of::<T>()).ok_or_else(|| {
-            LinkerError::metadata_rewrite("runtime section entry offset overflowed")
-        })?;
+        // Callers iterate over the count returned by section_entry_count::<T>.
+        let offset = index * size_of::<T>();
         Ok(section_addr + VmOffset::new(offset))
     }
 

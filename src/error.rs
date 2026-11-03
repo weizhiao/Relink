@@ -114,13 +114,6 @@ impl Display for IoError {
 pub enum MmapError {
     /// This backend does not support the requested file-mapping operation.
     FileMappingUnsupported,
-    /// The configured loader page size is incompatible with the mapping backend.
-    InvalidPageSize {
-        /// Page size requested by the loader.
-        configured: usize,
-        /// Minimum page size required by the mapping backend.
-        required: usize,
-    },
     #[cfg(not(windows))]
     /// `mmap failed with error: {code}`
     MmapFailed {
@@ -197,13 +190,6 @@ impl Display for MmapError {
             Self::FileMappingUnsupported => {
                 f.write_str("the requested file-mapping operation is unsupported by this backend")
             }
-            Self::InvalidPageSize {
-                configured,
-                required,
-            } => write!(
-                f,
-                "invalid loader page size: configured {configured}, required a multiple of {required}"
-            ),
             #[cfg(not(windows))]
             Self::MmapFailed { code } => write!(f, "mmap failed with error: {code}"),
             #[cfg(not(windows))]

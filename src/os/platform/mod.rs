@@ -1,6 +1,7 @@
-use crate::{IoError, ReadBoundsError, Result};
-use alloc::boxed::Box;
+use crate::{IoError, Result};
 
+/// Reads a validated file range using a platform reader that returns at most
+/// the supplied buffer length.
 #[inline]
 #[allow(dead_code)]
 fn read_exact_at(
@@ -9,27 +10,11 @@ fn read_exact_at(
     mut read_some: impl FnMut(&mut [u8], usize) -> Result<usize>,
 ) -> Result<()> {
     while !bytes.is_empty() {
-        let bytes_to_read = bytes.len();
         let size = read_some(bytes, offset)?;
         if size == 0 {
             return Err(IoError::FailedToFillBuffer.into());
         }
-        debug_assert!(size <= bytes_to_read);
-        if size > bytes_to_read {
-            return Err(IoError::ReadOutOfBounds(Box::new(ReadBoundsError::new(
-                offset,
-                size,
-                usize::MAX,
-            )))
-            .into());
-        }
-        offset = offset.checked_add(size).ok_or_else(|| {
-            IoError::ReadOutOfBounds(Box::new(ReadBoundsError::new(
-                offset,
-                bytes_to_read,
-                usize::MAX,
-            )))
-        })?;
+        offset += size;
         bytes = &mut bytes[size..];
     }
     Ok(())

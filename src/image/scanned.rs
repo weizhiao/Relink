@@ -16,10 +16,6 @@ use alloc::{boxed::Box, vec::Vec};
 use core::{ffi::CStr, fmt, mem::size_of, num::NonZeroUsize};
 
 fn string_at(bytes: &[u8], offset: usize) -> &CStr {
-    assert!(
-        offset <= bytes.len(),
-        "ELF string table offset is out of bounds"
-    );
     CStr::from_bytes_until_nul(&bytes[offset..])
         .expect("ELF string table entry is missing a NUL terminator")
 }
@@ -232,7 +228,7 @@ impl<'a, L: ElfLayout> Iterator for ScannedSections<'a, L> {
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         let len = self.table.map_or(0, |table| table.sections.len());
-        let remaining = len.saturating_sub(self.index);
+        let remaining = len - self.index;
         (remaining, Some(remaining))
     }
 }

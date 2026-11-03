@@ -25,16 +25,6 @@ pub struct FileBacking {
     pub len: usize,
 }
 
-impl FileBacking {
-    /// Checks range overflow and alignment for direct file mapping.
-    pub(crate) fn for_mapping(self, page_size: usize) -> Result<Option<Self>> {
-        self.offset
-            .checked_add(self.len)
-            .ok_or(IoError::ReadBufferTooLarge)?;
-        Ok(self.offset.is_multiple_of(page_size).then_some(self))
-    }
-}
-
 /// Reads ELF bytes and metadata from files, memory, or custom storage.
 pub trait ElfReader {
     /// Returns the loader source path or caller-provided source identifier.
@@ -60,8 +50,10 @@ pub trait ElfReader {
     /// Returns the backing range for direct page-granularity mapping.
     ///
     /// The range must describe the same source and length as this reader.
-    /// Unaligned ranges and unsupported platform mappings use reads instead.
-    /// The default provides no file backing and uses copying.
+    /// Unaligned file offsets use copying. Otherwise, returning `Some` selects
+    /// file mapping and requires a compatible mapping backend. Mapping errors
+    /// are returned without retrying through reads. Return `None` (the default)
+    /// to select copying.
     fn file_backing(&self) -> Option<FileBacking> {
         None
     }

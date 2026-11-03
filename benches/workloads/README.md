@@ -43,38 +43,40 @@ The earlier selection experiment used a frozen `.ii` with SHA-256
 That hash identifies the measured artifact; it is not a portable expected hash
 for regeneration against different system headers.
 
-## NPB CG BSS workload
-
-The [unofficial NPB 3.0 OpenMP C port](https://github.com/benchmark-subsetting/NPB3.0-omp-C)
-is built serially, without OpenMP, from commit
-`5d565d916cad47bf09a2fa7432bf8e5fa95446ec`:
+## LLVM optimization and code generation
 
 ```sh
-python3 benches/workloads/prepare.py cg            # Class B
-python3 benches/workloads/prepare.py cg --class A  # smaller, faster validation
+python3 benches/workloads/prepare.py llvm
+THP_WORKLOAD=llvm cargo bench --bench thp --features std,version
 ```
 
-| Class | Matrix dimension | Nonzeros parameter | Iterations | Shift | Approximate BSS |
-|---|---:|---:|---:|---:|---:|
-| A | 14,000 | 11 | 15 | 20 | 59.5 MiB |
-| B | 75,000 | 13 | 75 | 60 | 427 MiB |
+This reuses the same pinned simdjson sources and first prepares `simdjson.ii`.
+It then invokes the matching `CLANGXX` compiler (default `clang++`):
 
-The script verifies pinned source hashes, retains upstream permission notices,
-and writes sources, generated files and shared libraries under
-`target/thp-input/npb-cg/`. `CC` selects the compiler. Each class's `manifest.json`
-records the compile command, source hashes, adapter hash and resulting library
-hash. All loader cases use the same resulting binary. The 2 MiB ELF alignment is
-identical in all cases; no arrays or numerical loops are rearranged.
+```sh
+clang++ -std=c++17 -O1 -Xclang -disable-llvm-passes -emit-llvm -c simdjson.ii -o simdjson.bc
+```
 
-The adapter in `cg_adapter.c` exports a callable entry point, captures the original
-NPB verification result and final eigenvalue, suppresses progress printing, and
-uses a monotonic clock at the original timer boundaries. The algorithm and its
-reference eigenvalue/tolerance are unchanged. Compilation uses `-O3 -fPIC -shared`
-and `-Wl,-z,max-page-size=2097152,-Bsymbolic`; it does not enable fast math.
-Class B's verification reference is `22.712745482631`, with tolerance `1e-10`.
+`-O1` avoids `optnone` attributes; `-disable-llvm-passes` leaves optimization to
+the benchmark. The complete frontend-generated module is used without synthetic
+code expansion. Both generated inputs stay under `target/thp-input/`; the script
+prints their SHA-256 hashes. Use a compiler matching the measured libLLVM version.
+`LLVM_INPUT` selects a frozen bitcode file; `LLVM_LIBRARY` selects its monolithic
+shared libLLVM. Otherwise the library comes from `llvm-config --link-shared --libfiles`.
 
-| Source | SHA-256 |
-|---|---|
-| `CG/cg.c` | `9d31b513341ca602cc7d2e1b21bde1aa183be44400f919cdb632213c126543a2` |
-| `common/npb-C.h` | `7c06f0cfecc4ef2ff8f89dc67a8aaa5752e56e4d05dd7da9dd94a0d3ea5a272c` |
-| `common/c_randdp.c` | `0cb3e4d66bf4ed1e221c6d6f7c78f60a34a9684b8bad7fbc70de086b255d9938` |
+Each repetition clones the original module, runs LLVM's
+[`default<O3>` pipeline](https://llvm.org/doxygen/group__LLVMCCoreNewPM.html),
+and emits a PIC native ELF object in memory. The input fixes the target triple
+and function attributes; the target machine uses the generic CPU and aggressive
+code generation. Only optimization and object emission are timed. Bitcode reads,
+parsing, module cloning, IR verification, output hashing and teardown are excluded.
+
+LLVM verifies the input and compiled modules. Object length and an FNV-1a hash
+must match across repetitions and loaders. This checks reproducibility of emitted
+bytes; it does not run the object or prove semantic equivalence.
+
+The workload exercises the optimizer and backend code in the mapped libLLVM,
+where file-backed code pages can benefit from THP even when anonymous heap THP
+is already automatic. Whether this helps a particular machine must be established
+from both timings and actual page coverage. It measures compilation, not execution
+of generated simdjson code.

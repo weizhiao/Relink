@@ -1,14 +1,14 @@
-//! Clang frontend and NPB CG execution with and without Relink THP.
+//! Clang frontend and LLVM backend execution with and without Relink THP.
 #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
 compile_error!("the THP application benchmark requires Linux/glibc");
 
-#[path = "support/cg.rs"]
-mod cg;
 #[path = "support/clang.rs"]
 mod clang;
 #[path = "support/libraries.rs"]
 #[allow(dead_code)]
 mod libraries;
+#[path = "support/llvm.rs"]
+mod llvm;
 #[path = "support/mappings.rs"]
 mod mappings;
 #[path = "support/symbols.rs"]
@@ -18,40 +18,34 @@ use crate::{
     libraries::{HostLibraries, LibraryCache},
     symbols::Symbols,
 };
-use criterion::{BatchSize, BenchmarkId, Criterion, SamplingMode};
+use criterion::{BatchSize, BenchmarkId, Criterion};
 use elf_loader::{
     Linker, Loader,
     input::Path,
-    os::{PageSize, ThpPolicy},
+    os::{DefaultMmap, Mmap, ThpPolicy},
 };
 use libloading::os::unix::{Library, RTLD_LOCAL, RTLD_NOW};
 use std::{
     hint::black_box,
     io::{self, Write},
     os::unix::ffi::OsStrExt,
-    path::{Path as FsPath, PathBuf},
+    path::Path as FsPath,
     process::Command,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 #[derive(Clone, Copy)]
 enum Workload {
     Clang,
-    Cg,
+    Llvm,
 }
 
 impl Workload {
     fn from_env() -> Self {
         match std::env::var("THP_WORKLOAD").as_deref().unwrap_or("clang") {
             "clang" => Self::Clang,
-            "cg" => Self::Cg,
-            other => panic!("unknown THP_WORKLOAD {other}; choose clang or cg"),
-        }
-    }
-    fn library_path(self) -> PathBuf {
-        match self {
-            Self::Clang => clang::library_path(),
-            Self::Cg => cg::library_path(),
+            "llvm" => Self::Llvm,
+            other => panic!("unknown THP_WORKLOAD {other}; choose clang or llvm"),
         }
     }
 }
@@ -60,7 +54,6 @@ fn main() {
     let workload = Workload::from_env();
     match std::env::var("_RELINK_THP_BACKEND") {
         Ok(backend) => {
-            configure_process_thp();
             let library = std::env::var_os("_RELINK_THP_LIBRARY")
                 .expect("benchmark parent must provide the selected library");
             run_worker(workload, &backend, FsPath::new(&library));
@@ -69,32 +62,11 @@ fn main() {
     }
 }
 
-fn configure_process_thp() {
-    match std::env::var("THP_EXCEPT_ADVISED").as_deref() {
-        Err(_) | Ok("0") => eprintln!("Process THP: system policy"),
-        Ok("1") => {
-            // Linux PR_THP_DISABLE_EXCEPT_ADVISED = 1 << 1. This affects only
-            // this worker; fail explicitly if the kernel does not support it.
-            let result =
-                unsafe { libc::prctl(libc::PR_SET_THP_DISABLE, 1usize, 2usize, 0usize, 0usize) };
-            assert_eq!(
-                result,
-                0,
-                "THP except-advised is unavailable: {}",
-                io::Error::last_os_error()
-            );
-            assert_eq!(
-                unsafe { libc::prctl(libc::PR_GET_THP_DISABLE, 0usize, 0usize, 0usize, 0usize) },
-                3
-            );
-            eprintln!("Process THP: except-advised (global policy unchanged)");
-        }
-        Ok(value) => panic!("THP_EXCEPT_ADVISED must be 0 or 1, got {value}"),
-    }
-}
-
 fn run_all(workload: Workload) {
-    let library = workload.library_path();
+    let library = match workload {
+        Workload::Clang => clang::library_path(),
+        Workload::Llvm => llvm::library_path(),
+    };
     println!("THP application benchmark");
     println!("Library: {}", library.display());
     match workload {
@@ -103,11 +75,14 @@ fn run_all(workload: Workload) {
             println!("Input: {}", clang::input_path().display());
             println!("Timing: parsing; loading, collapse and AST validation are excluded.");
         }
-        Workload::Cg => {
-            println!("Workload: serial NPB CG, static sparse-matrix workspace in BSS");
-            println!("Timing: original NPB kernel; setup and numerical verification are excluded.");
+        Workload::Llvm => {
+            println!("Workload: simdjson 3.12.3 LLVM O3 optimization + native object generation");
+            println!("Input: {}", llvm::input_path().display());
+            println!(
+                "Timing: optimization/codegen; loading, IR setup, verification and teardown are excluded."
+            );
         }
-    };
+    }
     let mut expected = None;
     // Isolate process-global library state; all cases use identical inputs/options.
     for (backend, label) in [
@@ -148,7 +123,7 @@ fn run_all(workload: Workload) {
     println!("\nValidation: all three loaders produced matching results.");
     println!("Result: {}", expected.unwrap());
     println!("Pages cover the root library, including BSS; dependencies and heap are excluded.");
-    println!("Default loaders may already use THP; inspect page counts and the process policy.");
+    println!("Default loaders may already use THP; inspect actual page counts.");
 }
 
 fn run_worker(workload: Workload, backend: &str, library_path: &FsPath) {
@@ -161,16 +136,11 @@ fn run_worker(workload: Workload, backend: &str, library_path: &FsPath) {
     let loader = match backend {
         "relink" => Loader::new(),
         "relink_thp" => {
-            let size =
-                std::fs::read_to_string("/sys/kernel/mm/transparent_hugepage/hpage_pmd_size")
-                    .expect("kernel does not expose its THP PMD size");
-            let size = PageSize::new(size.trim().parse().expect("invalid THP PMD size"))
-                .expect("THP PMD size must be a power of two");
-            eprintln!(
-                "Requested huge-page size: {} MiB",
-                size.bytes() / (1024 * 1024)
-            );
-            Loader::new().with_thp(ThpPolicy::Collapse(size))
+            match DefaultMmap::new().thp_page_size() {
+                Some(size) => eprintln!("THP page size: {} MiB", size.bytes() / (1024 * 1024)),
+                None => eprintln!("THP size unavailable; THP optimization skipped"),
+            }
+            Loader::new().with_thp(ThpPolicy::Collapse)
         }
         _ => panic!("unknown benchmark backend: {backend}"),
     };
@@ -201,12 +171,12 @@ fn bench(workload: Workload, backend: &str, library: &(impl Symbols + ?Sized), p
         .measurement_time(Duration::from_secs(5))
         .sample_size(match workload {
             Workload::Clang => 30,
-            Workload::Cg => 10,
+            Workload::Llvm => 10,
         })
         .configure_from_args();
     match workload {
         Workload::Clang => bench_clang(&mut c, backend, library, path),
-        Workload::Cg => bench_cg(&mut c, backend, library, path),
+        Workload::Llvm => bench_llvm(&mut c, backend, library, path),
     }
     c.final_summary();
 }
@@ -234,39 +204,30 @@ fn bench_clang(c: &mut Criterion, backend: &str, library: &(impl Symbols + ?Size
     );
 }
 
-fn bench_cg(c: &mut Criterion, backend: &str, library: &(impl Symbols + ?Sized), path: &FsPath) {
-    let mut cg = cg::Cg::new(library);
-    let start = Instant::now();
-    let (kernel, expected) = cg.run();
-    eprintln!(
-        "Initial NPB run: kernel {:.6} s, application {:.6} s (includes setup/verification)",
-        kernel.as_secs_f64(),
-        start.elapsed().as_secs_f64()
-    );
+fn bench_llvm(c: &mut Criterion, backend: &str, library: &(impl Symbols + ?Sized), path: &FsPath) {
+    let llvm = llvm::Llvm::new(library);
+    let expected = {
+        let mut compilation = llvm.prepare();
+        compilation.run();
+        compilation.fingerprint()
+    };
     eprintln!("workload_result\t{expected}");
-    let before = mappings::snapshot(path, "relink_cg_run", cg.anchor());
-    let mut group = c.benchmark_group("thp_cg");
-    group.sampling_mode(SamplingMode::Flat);
-    let class = expected
-        .split('\t')
-        .next()
-        .unwrap()
-        .trim_start_matches("class=");
-    group.bench_function(BenchmarkId::new(format!("class_{class}"), backend), |b| {
-        b.iter_custom(|iterations| {
-            let mut elapsed = Duration::ZERO;
-            for _ in 0..iterations {
-                let (kernel, result) = cg.run();
-                assert_eq!(result, expected, "NPB CG result changed between iterations");
-                elapsed += kernel;
-            }
-            elapsed
-        });
+    let before = mappings::snapshot(path, "LLVMRunPasses", llvm.anchor());
+    let mut group = c.benchmark_group("thp_llvm");
+    group.bench_function(BenchmarkId::new("simdjson_o3_codegen", backend), |b| {
+        b.iter_batched_ref(
+            || llvm.prepare(),
+            |compilation| compilation.run(),
+            BatchSize::PerIteration,
+        );
     });
+    let mut compilation = llvm.prepare();
+    compilation.run();
+    assert_eq!(compilation.fingerprint(), expected);
     group.finish();
     mappings::report(
-        "NPB CG",
+        "libLLVM",
         before,
-        mappings::snapshot(path, "relink_cg_run", cg.anchor()),
+        mappings::snapshot(path, "LLVMRunPasses", llvm.anchor()),
     );
 }

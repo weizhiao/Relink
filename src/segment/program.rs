@@ -42,16 +42,23 @@ where
             check_read_range(phdr.p_offset(), phdr.p_filesz(), object.len())?;
         }
     }
-    let file_backing = match object.file_backing() {
-        Some(range) => mapper.file_backing(range)?,
-        None => None,
-    };
-    let thp = Thp::new(thp, file_backing, page_size);
+    let mut file_backing = object.file_backing();
+    if let Some(backing) = file_backing {
+        let alignment = mapper.page_size().bytes();
+        if !backing.offset.is_multiple_of(alignment) {
+            file_backing = None;
+        }
+    }
+    let thp = thp.and_then(|policy| mapper.thp_page_size().map(|size| Thp::new(policy, size)));
     let mut layout = parse_segments(phdrs, is_dylib, page_size)?;
     // The ELF image origin is independent of the mapping's alignment residue.
     let min_vaddr = VmOffset::new(layout.offset);
     if is_dylib && let Some(thp) = &thp {
-        thp.adjust_layout(phdrs, &mut layout);
+        thp.adjust_layout(
+            phdrs,
+            &mut layout,
+            file_backing.map(|backing| backing.offset),
+        );
     }
     let mapped = if is_dylib && let Some(backing) = file_backing {
         map_file_segments(phdrs, mapper, &layout, min_vaddr, backing, page_size)?
@@ -74,16 +81,24 @@ where
         let region = unsafe { mapper.create_space(layout, prot, init) }?;
         let base = region.addr() - min_vaddr;
         let loaded = ElfSegments::new(region, base, min_vaddr);
+        if !use_file && let Some(thp) = &thp {
+            thp.prepare_copy(phdrs, mapper, base);
+        }
         populate_segments(mapper, object, &loaded, segments.clone(), file_backing)?;
         if !use_file {
+            // Anonymous collapse needs populated, still-writable pages, even
+            // when the segment will ultimately become executable or read-only.
+            if let Some(thp) = &thp {
+                thp.finish_copy(phdrs, mapper, base);
+            }
             protect_segments(&loaded, segments)?;
         }
         loaded
     };
     // All MAP_FIXED replacements, tail clearing, and segment protections must
     // precede advice, on both the initial-file and reserved-space paths.
-    if let Some(thp) = thp {
-        thp.advise(phdrs, mapper, loaded.base());
+    if let (Some(backing), Some(thp)) = (file_backing, thp) {
+        thp.advise_file(phdrs, mapper, loaded.base(), backing.offset);
     }
     Ok(loaded)
 }

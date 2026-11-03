@@ -244,7 +244,7 @@ const fn symbol_info(bind: DsoSymbolBind, kind: DsoSymbolKind) -> u8 {
 
 #[inline]
 fn validate_page_size(page_size: usize) -> Result<()> {
-    if page_size == 0 || !page_size.is_power_of_two() {
+    if !page_size.is_power_of_two() {
         return Err(custom_error(
             "generated DSO page size must be a non-zero power of two",
         ));

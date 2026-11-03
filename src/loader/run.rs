@@ -300,7 +300,7 @@ where
             return Err(ParsePhdrError::MissingDynamicSection.into());
         }
 
-        let page_size = loader.page_size()?.bytes();
+        let page_size = loader.mapper().page_size().bytes();
         let segments = load_segments(
             phdrs,
             ehdr.is_dylib(),
@@ -417,7 +417,7 @@ where
     ) -> Result<RawDynamic<D, Arch, M::Region, Tls>> {
         let path = path.into();
         let phdrs = phdrs.into();
-        let page_size = self.loader.page_size()?.bytes();
+        let page_size = self.loader.mapper().page_size().bytes();
         let layout = parse_segments(&phdrs, true, page_size)?;
         let min_vaddr = VmOffset::new(layout.offset);
         let mapped_addr = load_bias + min_vaddr;

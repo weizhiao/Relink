@@ -102,10 +102,7 @@ impl<R: RegionAccess> ElfSegments<R> {
             );
 
             if previous_end == range.offset {
-                merged[previous_idx].len = range_end
-                    .checked_offset_from(previous.offset)
-                    .expect("ELF mapped range overflowed")
-                    .get();
+                merged[previous_idx].len = range_end.get() - previous.offset.get();
             } else {
                 merged.push(range);
             }
@@ -235,7 +232,7 @@ impl<R: RegionAccess> ElfSegments<R> {
             .ranges
             .partition_point(|range| range.offset.get() <= offset.get());
         let range = *self.ranges.get(idx.checked_sub(1)?)?;
-        let relative = offset.get().checked_sub(range.offset.get())?;
+        let relative = offset.get() - range.offset.get();
         let remaining = range.len.checked_sub(relative)?;
         let byte_len = remaining - remaining % entry_size;
         if byte_len == 0 {

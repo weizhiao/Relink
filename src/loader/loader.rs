@@ -1,9 +1,8 @@
 use super::run::LoaderRun;
 use crate::{
-    MmapError, Result,
     arch::NativeArch,
     const_builder::NoDrop,
-    os::{DefaultMmap, Mmap, PageSize, ThpPolicy},
+    os::{DefaultMmap, Mmap, ThpPolicy},
     relocation::RelocationArch,
     runtime::Domain,
     tls::TlsResolver,
@@ -38,7 +37,6 @@ where
     M: Mmap,
 {
     mapper: M,
-    page_size: Option<PageSize>,
     thp: Option<ThpPolicy>,
     force_static_tls: bool,
     _marker: PhantomData<fn() -> (D, Arch)>,
@@ -54,7 +52,6 @@ where
 
 struct LoaderFields<M> {
     mapper: NoDrop<M>,
-    page_size: Option<PageSize>,
     thp: Option<ThpPolicy>,
     force_static_tls: bool,
 }
@@ -69,13 +66,11 @@ impl<M> LoaderFields<M> {
     {
         let Self {
             mapper,
-            page_size,
             thp,
             force_static_tls,
         } = self;
         Loader {
             mapper: mapper.into_inner(),
-            page_size,
             thp,
             force_static_tls,
             _marker: PhantomData,
@@ -91,14 +86,12 @@ impl<M> LoaderFields<M> {
         M: Copy,
     {
         let Self {
-            page_size,
             thp,
             force_static_tls,
             ..
         } = self;
         Loader {
             mapper,
-            page_size,
             thp,
             force_static_tls,
             _marker: PhantomData,
@@ -116,7 +109,6 @@ where
     fn clone(&self) -> Self {
         Self {
             mapper: self.mapper.clone(),
-            page_size: self.page_size,
             thp: self.thp,
             force_static_tls: self.force_static_tls,
             _marker: PhantomData,
@@ -131,7 +123,6 @@ impl Loader<(), NativeArch, DefaultMmap> {
     pub const fn new() -> Self {
         Self {
             mapper: DefaultMmap::new(),
-            page_size: None,
             thp: None,
             force_static_tls: false,
             _marker: PhantomData,
@@ -159,8 +150,6 @@ where
         unsafe {
             LoaderFields {
                 mapper: NoDrop::read(ptr::addr_of!((*this).mapper)),
-
-                page_size: ptr::read(ptr::addr_of!((*this).page_size)),
                 thp: ptr::read(ptr::addr_of!((*this).thp)),
                 force_static_tls: ptr::read(ptr::addr_of!((*this).force_static_tls)),
             }
@@ -200,23 +189,6 @@ where
         }
     }
 
-    #[inline]
-    pub(crate) fn page_size(&self) -> Result<PageSize> {
-        let required = self.mapper.page_size();
-        let page_size = self.page_size.unwrap_or(required);
-        if page_size.bytes() < required.bytes()
-            || !page_size.bytes().is_multiple_of(required.bytes())
-        {
-            return Err(MmapError::InvalidPageSize {
-                configured: page_size.bytes(),
-                required: required.bytes(),
-            }
-            .into());
-        }
-
-        Ok(page_size)
-    }
-
     /// Sets the user-data type for dynamic images, initialized with `NewD::default()`.
     /// Populate it after parsing through
     /// [`LoadObserver::on_after_dynamic_load`](crate::observer::LoadObserver::on_after_dynamic_load).
@@ -227,32 +199,26 @@ where
         self.into_fields().into_loader()
     }
 
-    /// Overrides the base page size used for segment layout decisions.
-    ///
-    /// By default, the loader uses [`Mmap::page_size`]. An override is useful
-    /// for special runtimes and tests, but it must remain compatible with the
-    /// mapping backend and with every loaded ELF's `PT_LOAD` alignment.
-    pub const fn with_page_size(mut self, page_size: PageSize) -> Self {
-        self.page_size = Some(page_size);
-        self
-    }
-
-    /// Configures transparent huge pages for eligible file contents and anonymous BSS.
+    /// Configures transparent huge pages for mapped or copied ELF images.
     ///
     /// No policy is configured by default, so no advice is sent. The policy
-    /// applies after mapping to complete pages inside readable, non-writable
+    /// applies after mapping to complete pages inside non-writable
     /// LOAD file contents. Writable anonymous BSS always receives `MADV_HUGEPAGE`,
     /// including with [`ThpPolicy::Collapse`], before relocation and constructors.
-    /// Sparse BSS usage may increase resident memory. Copied inputs, section arenas,
-    /// and borrowed mappings are excluded. For overlapping LOADs, advice applies
-    /// to the final mappings.
+    /// Copied inputs receive `MADV_HUGEPAGE` for all LOADs before copying, including
+    /// writable contents and BSS. `Collapse` also attempts to collapse initialized
+    /// contents after copying, before final segment protections.
+    /// Sparse usage may increase resident memory. Section arenas and borrowed
+    /// mappings are excluded. For overlapping file LOADs, advice applies to the
+    /// final mappings.
     ///
-    /// [`ThpPolicy::Advise`] and [`ThpPolicy::Collapse`] take a target page size
-    /// appropriate for the backend; no system policy is probed. The size must be
-    /// a power of two larger than the base page size; otherwise no advice or
-    /// additional alignment is requested. These policies may increase image
-    /// alignment and choose a load bias that favors executable coverage, then
-    /// total read-only coverage, while preserving ELF alignment requirements.
+    /// The target size comes from [`Mmap::thp_page_size`]. Linux's default backend
+    /// reads and caches `/sys/kernel/mm/transparent_hugepage/hpage_pmd_size`.
+    /// An unavailable size disables advice and additional alignment. These policies
+    /// may increase image alignment while preserving ELF alignment requirements.
+    /// File mappings choose a load bias favoring executable coverage, then total
+    /// non-writable coverage; copied inputs align the load bias without file-offset
+    /// constraints.
     /// Base page size, permissions, and relative segment layout are unchanged.
     /// The target size guides alignment and range selection; the kernel chooses
     /// the actual huge-page size.
@@ -262,9 +228,9 @@ where
     /// fail a load. See [`ThpPolicy`] for the effects of each policy.
     ///
     /// ```
-    /// use elf_loader::{Loader, os::{PageSize, ThpPolicy}};
+    /// use elf_loader::{Loader, os::ThpPolicy};
     ///
-    /// let loader = Loader::new().with_thp(ThpPolicy::Advise(PageSize::Huge2MiB));
+    /// let loader = Loader::new().with_thp(ThpPolicy::Advise);
     /// ```
     pub const fn with_thp(mut self, policy: ThpPolicy) -> Self {
         self.thp = Some(policy);
@@ -278,6 +244,7 @@ where
     }
 
     /// Returns a new loader with a custom `Mmap` backend.
+    /// Segment and section layouts use the backend's [`Mmap::page_size`].
     pub const fn with_mmap<NewMmap>(self, mapper: NewMmap) -> Loader<D, Arch, NewMmap>
     where
         NewMmap: Mmap,

@@ -93,14 +93,10 @@ where
 #[inline]
 fn entry_bytes<T>(shdr: &ElfShdr<impl ElfLayout>) -> usize {
     let entry_size = size_of::<T>();
-    shdr.sh_size()
-        .checked_div(entry_size)
-        .unwrap_or(0)
-        .saturating_mul(entry_size)
+    shdr.sh_size() / entry_size * entry_size
 }
 
 #[inline]
 fn entry_count<T>(byte_len: usize) -> usize {
-    let entry_size = size_of::<T>();
-    byte_len.checked_div(entry_size).unwrap_or(0)
+    byte_len / size_of::<T>()
 }

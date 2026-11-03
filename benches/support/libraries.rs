@@ -64,7 +64,15 @@ impl LibraryCache {
     }
 
     pub fn resolver(&self) -> SearchPathResolver {
-        SearchPathResolver::with_config(SearchConfig::new().cache(self.cache.clone()))
+        let mut config = SearchConfig::new().cache(self.cache.clone());
+        if let Some(paths) = std::env::var_os("LD_LIBRARY_PATH") {
+            let executable = std::env::current_exe().expect("cannot locate benchmark executable");
+            config = config.library_path(
+                ElfPath::new(paths.as_bytes()),
+                ElfPath::new(executable.parent().unwrap().as_os_str().as_bytes()),
+            );
+        }
+        SearchPathResolver::with_config(config)
     }
 }
 

@@ -41,7 +41,7 @@ impl Mmap for AllocMmap {
             return Err(crate::MmapError::FileMappingUnsupported.into());
         }
         if let Some(addr) = layout.addr.filter(|addr| *addr != VmAddr::null()) {
-            if !layout.is_aligned(addr) || addr.get().checked_add(layout.len).is_none() {
+            if !layout.is_aligned(addr) {
                 return Err(MmapError::InvalidMappedRegionRange.into());
             }
             if matches!(init, SpaceInit::Zeroed) {
@@ -70,18 +70,6 @@ impl Mmap for AllocMmap {
     unsafe fn alias_space(&self, addr: VmAddr, len: usize) -> Result<MappedRegion<Self::Region>> {
         // SAFETY: the caller guarantees the existing storage remains valid.
         Ok(unsafe { MappedRegion::local_alias_no_unmap(addr.as_mut_ptr::<u8>().cast(), len) })
-    }
-
-    unsafe fn map_file_at(
-        &self,
-        _addr: VmAddr,
-        _len: usize,
-        _prot: ProtFlags,
-        _flags: MapFlags,
-        _offset: usize,
-        _fd: isize,
-    ) -> Result<()> {
-        Err(crate::MmapError::FileMappingUnsupported.into())
     }
 
     unsafe fn map_zero_at(

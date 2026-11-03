@@ -2,55 +2,50 @@ use core::ops::Range;
 
 use crate::{
     elf::{ElfLayout, ElfPhdr, ElfProgramFlags, ElfProgramType},
-    input::FileBacking,
     logging,
     memory::{VmAddr, VmOffset, rounddown, roundup},
-    os::{MadviseAdvice, Mmap, SpaceLayout, ThpPolicy},
+    os::{MadviseAdvice, Mmap, PageSize, SpaceLayout, ThpPolicy},
 };
 
-/// Applies THP preferences to file-mapped images, including anonymous BSS.
+/// Applies THP preferences to directly mapped and copied images.
 /// LOAD file bounds and virtual address ranges are validated by `load_segments`.
 pub(super) struct Thp {
     page_size: usize,
-    file_offset: usize,
     policy: ThpPolicy,
 }
 
 impl Thp {
-    pub(super) fn new(
-        policy: Option<ThpPolicy>,
-        backing: Option<FileBacking>,
-        base_page_size: usize,
-    ) -> Option<Self> {
-        let policy = policy?;
-        let page_size = match policy {
-            ThpPolicy::Advise(size) | ThpPolicy::Collapse(size) => size.bytes(),
-        };
-        if !page_size.is_power_of_two() || page_size <= base_page_size {
-            return None;
-        }
-        Some(Self {
-            page_size,
-            file_offset: backing?.offset,
+    pub(super) fn new(policy: ThpPolicy, page_size: PageSize) -> Self {
+        Self {
+            page_size: page_size.bytes(),
             policy,
-        })
+        }
     }
 
     /// Prefer the load bias covering the most executable file bytes, then the
-    /// most total read-only bytes. Every candidate preserves ELF alignment.
+    /// most total non-writable bytes. Every candidate preserves ELF alignment.
     pub(super) fn adjust_layout<L: ElfLayout>(
         &self,
         phdrs: &[ElfPhdr<L>],
         layout: &mut SpaceLayout,
+        file_offset: Option<usize>,
     ) {
         // ELF alignment already fixes the bias modulo the huge-page size.
         if layout.align >= self.page_size {
             return;
         }
+        // Copied images have no file-offset congruence requirement. Align their
+        // load bias while preserving the original ELF image origin.
+        let Some(file_offset) = file_offset else {
+            if layout.len >= self.page_size {
+                layout.align = self.page_size;
+            }
+            return;
+        };
         let mut best = (0, 0);
         let mut bias = 0;
         for phdr in phdrs {
-            let Some(file) = self.file_range(phdr) else {
+            let Some(file) = Self::file_range(phdr, file_offset) else {
                 continue;
             };
             // B + p_vaddr must be congruent to the actual file offset modulo H.
@@ -60,7 +55,7 @@ impl Thp {
             }
             let mut score = (0usize, 0usize);
             for other in phdrs {
-                if let Some(range) = self.range(other, candidate) {
+                if let Some(range) = self.aligned_file_range(other, candidate, file_offset) {
                     let len = range.end - range.start;
                     if other.flags().contains(ElfProgramFlags::EXEC) {
                         score.0 = score.0.saturating_add(len);
@@ -79,22 +74,26 @@ impl Thp {
         }
     }
 
-    fn file_range<L: ElfLayout>(&self, phdr: &ElfPhdr<L>) -> Option<Range<usize>> {
+    fn file_range<L: ElfLayout>(phdr: &ElfPhdr<L>, file_offset: usize) -> Option<Range<usize>> {
         if phdr.program_type() != ElfProgramType::LOAD
-            || !phdr.flags().contains(ElfProgramFlags::READ)
             || phdr.flags().contains(ElfProgramFlags::WRITE)
             || phdr.p_filesz() == 0
         {
             return None;
         }
-        let start = self.file_offset + phdr.p_offset();
+        let start = file_offset + phdr.p_offset();
         Some(start..start + phdr.p_filesz())
     }
 
     /// Select complete file huge pages whose runtime addresses are also aligned.
     /// Return ELF-relative addresses; overlapping LOADs use the final mappings.
-    fn range<L: ElfLayout>(&self, phdr: &ElfPhdr<L>, bias: usize) -> Option<Range<usize>> {
-        let file = self.file_range(phdr)?;
+    fn aligned_file_range<L: ElfLayout>(
+        &self,
+        phdr: &ElfPhdr<L>,
+        bias: usize,
+        file_offset: usize,
+    ) -> Option<Range<usize>> {
+        let file = Self::file_range(phdr, file_offset)?;
         let vaddr = phdr.p_vaddr().get();
         if !bias
             .wrapping_add(vaddr)
@@ -120,47 +119,106 @@ impl Thp {
         {
             return None;
         }
-        let addr = (base + phdr.p_vaddr()).get();
-        let start = roundup(addr + phdr.p_filesz(), self.page_size);
-        let end = rounddown(addr + phdr.p_memsz(), self.page_size);
+        let addr = phdr.p_vaddr().get();
+        self.memory_range(addr + phdr.p_filesz()..addr + phdr.p_memsz(), base.get())
+    }
+
+    fn memory_range(&self, range: Range<usize>, bias: usize) -> Option<Range<usize>> {
+        let start = roundup(bias + range.start, self.page_size);
+        let end = rounddown(bias + range.end, self.page_size);
         if start >= end {
             return None;
         }
-        Some(start - base.get()..end - base.get())
+        Some(start - bias..end - bias)
     }
 
-    pub(super) fn advise<L: ElfLayout, M: Mmap + ?Sized>(
+    /// Enable huge-page allocation on first write, including for untouched BSS.
+    pub(super) fn prepare_copy<L: ElfLayout, M: Mmap + ?Sized>(
         &self,
         phdrs: &[ElfPhdr<L>],
         mapper: &M,
         base: VmAddr,
     ) {
+        self.advise_copy(phdrs, mapper, base, MadviseAdvice::HugePage);
+    }
+
+    /// Collapse initialized anonymous contents before removing write permission.
+    pub(super) fn finish_copy<L: ElfLayout, M: Mmap + ?Sized>(
+        &self,
+        phdrs: &[ElfPhdr<L>],
+        mapper: &M,
+        base: VmAddr,
+    ) {
+        if matches!(self.policy, ThpPolicy::Collapse) {
+            self.advise_copy(phdrs, mapper, base, MadviseAdvice::Collapse);
+        }
+    }
+
+    fn advise_copy<L: ElfLayout, M: Mmap + ?Sized>(
+        &self,
+        phdrs: &[ElfPhdr<L>],
+        mapper: &M,
+        base: VmAddr,
+        advice: MadviseAdvice,
+    ) {
         for phdr in phdrs {
-            let (range, advice, description) = if let Some(range) = self.range(phdr, base.get()) {
-                let (advice, description) = match self.policy {
-                    ThpPolicy::Advise(_) => (MadviseAdvice::HugePage, "file MADV_HUGEPAGE"),
-                    ThpPolicy::Collapse(_) => (MadviseAdvice::Collapse, "file MADV_COLLAPSE"),
-                };
-                (range, advice, description)
-            } else if let Some(range) = self.bss_range(phdr, base) {
-                (range, MadviseAdvice::HugePage, "BSS MADV_HUGEPAGE")
-            } else {
+            if phdr.program_type() != ElfProgramType::LOAD {
                 continue;
+            }
+            let start = phdr.p_vaddr().get();
+            let len = match advice {
+                MadviseAdvice::HugePage => phdr.p_memsz(),
+                MadviseAdvice::Collapse => phdr.p_filesz(),
+                _ => unreachable!("THP only uses huge-page advice"),
             };
-            let addr = base + VmOffset::new(range.start);
-            let len = range.end - range.start;
-            // SAFETY: the interval lies within final LOAD mappings owned by
-            // this mapper, including when another LOAD replaced part of it.
-            // Declared BSS receives non-faulting, content-preserving advice.
-            // File advice also preserves contents, including synchronous collapse.
-            let result = unsafe { mapper.madvise(addr, len, advice) };
-            match result {
-                Ok(()) => {
-                    logging::debug!("[THP] {description} accepted for {addr}, length {len}")
-                }
-                Err(error) => {
-                    logging::debug!("[THP] {description} ignored for {addr}, length {len}: {error}")
-                }
+            if let Some(range) = self.memory_range(start..start + len, base.get()) {
+                self.apply(mapper, base, range, advice);
+            }
+        }
+    }
+
+    /// Advise final file mappings and their anonymous BSS after all replacements.
+    pub(super) fn advise_file<L: ElfLayout, M: Mmap + ?Sized>(
+        &self,
+        phdrs: &[ElfPhdr<L>],
+        mapper: &M,
+        base: VmAddr,
+        file_offset: usize,
+    ) {
+        for phdr in phdrs {
+            let (range, advice) =
+                if let Some(range) = self.aligned_file_range(phdr, base.get(), file_offset) {
+                    let advice = match self.policy {
+                        ThpPolicy::Advise => MadviseAdvice::HugePage,
+                        ThpPolicy::Collapse => MadviseAdvice::Collapse,
+                    };
+                    (range, advice)
+                } else if let Some(range) = self.bss_range(phdr, base) {
+                    (range, MadviseAdvice::HugePage)
+                } else {
+                    continue;
+                };
+            self.apply(mapper, base, range, advice);
+        }
+    }
+
+    fn apply<M: Mmap + ?Sized>(
+        &self,
+        mapper: &M,
+        base: VmAddr,
+        range: Range<usize>,
+        advice: MadviseAdvice,
+    ) {
+        let addr = base + VmOffset::new(range.start);
+        let len = range.end - range.start;
+        // SAFETY: the interval lies within LOAD mappings owned by this mapper.
+        // Both advice types preserve contents. Collapse only covers initialized
+        // contents; untouched anonymous memory receives non-faulting advice.
+        let result = unsafe { mapper.madvise(addr, len, advice) };
+        match result {
+            Ok(()) => logging::debug!("[THP] {advice:?} accepted for {addr}, length {len}"),
+            Err(error) => {
+                logging::debug!("[THP] {advice:?} ignored for {addr}, length {len}: {error}")
             }
         }
     }

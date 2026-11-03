@@ -1,6 +1,6 @@
 use crate::{
     IoError, MmapError, Result,
-    input::{FileBacking, ModuleSourceId, Path},
+    input::{ModuleSourceId, Path},
     memory::{HostRegion, MappedRegion, VmAddr},
     os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags, SpaceInit, SpaceLayout},
 };
@@ -180,11 +180,6 @@ fn prot_win(prot: ProtFlags, is_file_mapping: bool) -> PAGE_PROTECTION_FLAGS {
 
 impl Mmap for DefaultMmap {
     type Region = HostRegion;
-
-    #[inline]
-    fn file_backing(&self, backing: FileBacking) -> Result<Option<FileBacking>> {
-        backing.for_mapping(self.page_size().bytes())
-    }
 
     #[inline]
     fn page_size(&self) -> PageSize {

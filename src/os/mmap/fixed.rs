@@ -139,18 +139,6 @@ impl Mmap for FixedMmap {
         self.region(addr, len).map(MappedRegion::new)
     }
 
-    unsafe fn map_file_at(
-        &self,
-        _addr: VmAddr,
-        _len: usize,
-        _prot: ProtFlags,
-        _flags: MapFlags,
-        _offset: usize,
-        _fd: isize,
-    ) -> Result<()> {
-        Err(crate::MmapError::FileMappingUnsupported.into())
-    }
-
     unsafe fn map_zero_at(
         &self,
         addr: VmAddr,

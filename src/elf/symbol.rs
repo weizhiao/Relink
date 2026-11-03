@@ -423,10 +423,6 @@ impl ElfStringTable {
     #[inline]
     fn bytes_from(&self, offset: usize) -> &'static [u8] {
         let bytes = self.view.as_slice();
-        assert!(
-            offset <= bytes.len(),
-            "ELF string table offset is out of bounds"
-        );
         &bytes[offset..]
     }
 

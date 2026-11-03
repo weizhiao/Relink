@@ -1,7 +1,9 @@
 use crate::{
     MmapError, Result,
+    input::Path,
     memory::{HostRegion, MappedRegion, VmAddr, VmOffset},
-    os::{MapFlags, Mmap, ProtFlags, SpaceInit, SpaceLayout},
+    os::{MapFlags, Mmap, PageSize, ProtFlags, SpaceInit, SpaceLayout},
+    sync::OnceCell,
 };
 
 pub(super) use super::read_exact_at;
@@ -13,11 +15,29 @@ cfg_if::cfg_if! {
         pub use syscall::DefaultMmap;
         pub(crate) use syscall::{RawFile, getauxval, path_is_dir};
     } else {
-        mod hosted;
+        mod libc;
 
-        pub use hosted::DefaultMmap;
-        pub(crate) use hosted::{RawFile, getauxval, path_is_dir};
+        pub use libc::DefaultMmap;
+        pub(crate) use libc::{RawFile, getauxval, path_is_dir};
     }
+}
+
+fn thp_page_size() -> Option<PageSize> {
+    static SIZE: OnceCell<Option<PageSize>> = OnceCell::new();
+    *SIZE.get_or_init(|| {
+        let file = RawFile::from_path(Path::new(
+            "/sys/kernel/mm/transparent_hugepage/hpage_pmd_size",
+        ))
+        .ok()?;
+        let mut bytes = [0u8; 32];
+        let len = file.read_some(&mut bytes, 0).ok()?;
+        let size = core::str::from_utf8(&bytes[..len])
+            .ok()?
+            .strip_suffix('\n')?
+            .parse()
+            .ok()?;
+        PageSize::new(size)
+    })
 }
 
 // Both Linux backends use the same reservation and alignment rules.

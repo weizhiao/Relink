@@ -126,10 +126,7 @@ impl<R: RegionAccess> RuntimeModuleMemory<R> {
         let mut runtime_sections = Vec::with_capacity(placed_sections.len());
 
         for (section, source_address, actual_address, size) in &placed_sections {
-            let runtime_offset = actual_address.checked_sub(base).ok_or_else(|| {
-                LinkerError::runtime_memory("arena-backed module address precedes runtime base")
-            })?;
-            let runtime_offset = RuntimeOffset::new(runtime_offset);
+            let runtime_offset = RuntimeOffset::new(actual_address - base);
             mapped_ranges.push((runtime_offset.get(), *size));
             runtime_sections.push(RuntimeSectionMemory {
                 section: *section,

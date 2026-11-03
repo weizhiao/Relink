@@ -1,6 +1,6 @@
 use crate::{
     IoError, MmapError, Result,
-    input::{FileBacking, ModuleSourceId, Path},
+    input::{ModuleSourceId, Path},
     memory::{HostRegion, MappedRegion, VmAddr},
     os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags, SpaceInit, SpaceLayout},
 };
@@ -38,7 +38,7 @@ pub(crate) fn getauxval(at: usize) -> usize {
 pub struct DefaultMmap;
 
 impl DefaultMmap {
-    /// Creates the default hosted mmap implementation.
+    /// Creates the default libc-backed mmap implementation.
     #[inline]
     pub const fn new() -> Self {
         Self
@@ -83,11 +83,6 @@ impl Mmap for DefaultMmap {
     type Region = HostRegion;
 
     #[inline]
-    fn file_backing(&self, backing: FileBacking) -> Result<Option<FileBacking>> {
-        backing.for_mapping(self.page_size().bytes())
-    }
-
-    #[inline]
     fn page_size(&self) -> PageSize {
         let page_size = unsafe { sysconf(_SC_PAGESIZE) };
         if page_size <= 0 {
@@ -95,6 +90,10 @@ impl Mmap for DefaultMmap {
         } else {
             PageSize::new(page_size as usize).unwrap_or_default()
         }
+    }
+
+    fn thp_page_size(&self) -> Option<PageSize> {
+        super::thp_page_size()
     }
 
     unsafe fn create_space(
@@ -205,21 +204,23 @@ impl RawFile {
     }
 
     pub(crate) fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
-        super::read_exact_at(buf, offset, |bytes, offset| {
-            loop {
-                match self.file.read_at(bytes, offset as u64) {
-                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                    result => {
-                        return result.map_err(|error| {
-                            IoError::ReadFailed {
-                                code: os_error_code(&error),
-                            }
-                            .into()
-                        });
-                    }
+        super::read_exact_at(buf, offset, |bytes, offset| self.read_some(bytes, offset))
+    }
+
+    pub(super) fn read_some(&self, bytes: &mut [u8], offset: usize) -> Result<usize> {
+        loop {
+            match self.file.read_at(bytes, offset as u64) {
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                result => {
+                    return result.map_err(|error| {
+                        IoError::ReadFailed {
+                            code: os_error_code(&error),
+                        }
+                        .into()
+                    });
                 }
             }
-        })
+        }
     }
 
     pub(crate) fn mapping_handle(&self) -> isize {

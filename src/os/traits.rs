@@ -1,6 +1,6 @@
 use super::{MadviseAdvice, MapFlags, PageSize, ProtFlags};
 use crate::memory::{MappedRegion, RegionAccess, VmAddr};
-use crate::{Result, input::FileBacking};
+use crate::{MmapError, Result};
 use alloc::sync::Arc;
 
 /// Address preference, size, and alignment of a newly created mapping.
@@ -55,6 +55,12 @@ pub enum SpaceInit {
 /// [`Self::create_space`] returns an owned mapping. File and zero-page operations
 /// fill subranges without taking ownership. Implementations must support
 /// concurrent calls and report mapping failures.
+///
+/// Memory-only backends can leave [`Self::map_file_at`] at its default and reject
+/// [`SpaceInit::File`] in [`Self::create_space`] with
+/// [`MmapError::FileMappingUnsupported`]. Use an [`crate::input::ElfBinary`] or a
+/// reader without file backing with these backends. File-capable backends
+/// implement `map_file_at`; no separate capability switch is required.
 pub trait Mmap: Send + Sync + 'static {
     /// Region type created by this mapping backend.
     type Region: RegionAccess;
@@ -69,14 +75,14 @@ pub trait Mmap: Send + Sync + 'static {
         PageSize::Base
     }
 
-    /// Selects direct mapping (`Some`) or reading and copying (`None`, the default).
+    /// Returns the target size for transparent huge-page alignment and advice.
     ///
-    /// An accepted range must contain the same bytes as the input. This query does
-    /// not map memory or take ownership of the file handle. Invalid descriptions
-    /// return errors; later mapping failures do not fall back to copying.
+    /// `None` disables the loader's THP optimization. Backends may cache this
+    /// query; a reported size does not guarantee that huge pages can be allocated.
+    /// The backend must return a power-of-two size larger than [`Self::page_size`].
     #[inline]
-    fn file_backing(&self, _backing: FileBacking) -> Result<Option<FileBacking>> {
-        Ok(None)
+    fn thp_page_size(&self) -> Option<PageSize> {
+        None
     }
 
     /// Creates an owned address range with the requested size and alignment,
@@ -126,20 +132,23 @@ pub trait Mmap: Send + Sync + 'static {
 
     /// Maps file contents into a subrange of an owned mapping created by this backend.
     /// The backend must prepare the subrange, splitting reservations if needed.
-    /// Unsupported operations must return an error.
+    /// The default returns [`MmapError::FileMappingUnsupported`]. File-mapping
+    /// failures are propagated; the loader does not retry by copying the input.
     ///
     /// # Safety
     /// `addr..addr + len` must be within a region created by this mapper.
     /// `fd` and `offset` must identify a valid readable file range of `len` bytes.
     unsafe fn map_file_at(
         &self,
-        addr: VmAddr,
-        len: usize,
-        prot: ProtFlags,
-        flags: MapFlags,
-        offset: usize,
-        fd: isize,
-    ) -> Result<()>;
+        _addr: VmAddr,
+        _len: usize,
+        _prot: ProtFlags,
+        _flags: MapFlags,
+        _offset: usize,
+        _fd: isize,
+    ) -> Result<()> {
+        Err(MmapError::FileMappingUnsupported.into())
+    }
 
     /// Maps or commits anonymous zero-filled pages into an already-created space.
     ///
@@ -201,8 +210,8 @@ where
     }
 
     #[inline]
-    fn file_backing(&self, backing: FileBacking) -> Result<Option<FileBacking>> {
-        (**self).file_backing(backing)
+    fn thp_page_size(&self) -> Option<PageSize> {
+        (**self).thp_page_size()
     }
 
     #[inline]

@@ -1,10 +1,8 @@
-use crate::input::{FileBacking, ModuleSourceId, Path};
-#[cfg(target_pointer_width = "32")]
-use crate::os::PageSize;
+use crate::input::{ModuleSourceId, Path};
 use crate::{
     Error, IoError, MmapError, Result, logging,
     memory::{HostRegion, MappedRegion, VmAddr},
-    os::{MadviseAdvice, MapFlags, Mmap, ProtFlags, SpaceInit, SpaceLayout},
+    os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags, SpaceInit, SpaceLayout},
 };
 use alloc::ffi::CString;
 use core::{
@@ -146,9 +144,8 @@ struct Statx {
 impl Mmap for DefaultMmap {
     type Region = HostRegion;
 
-    #[inline]
-    fn file_backing(&self, backing: FileBacking) -> Result<Option<FileBacking>> {
-        backing.for_mapping(self.page_size().bytes())
+    fn thp_page_size(&self) -> Option<PageSize> {
+        super::thp_page_size()
     }
 
     unsafe fn create_space(
@@ -375,7 +372,7 @@ impl RawFile {
         Ok((len, source_id.unwrap_or_else(ModuleSourceId::fresh)))
     }
 
-    fn read_some(&self, bytes: &mut [u8], offset: usize) -> Result<usize> {
+    pub(super) fn read_some(&self, bytes: &mut [u8], offset: usize) -> Result<usize> {
         from_ret(
             unsafe { pread64(self.fd, bytes.as_mut_ptr(), bytes.len(), offset) },
             |code| Error::from(IoError::ReadFailed { code }),
