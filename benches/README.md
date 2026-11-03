@@ -5,8 +5,11 @@ baselines after harness changes.
 
 ## THP execution
 
-Choose `THP_WORKLOAD=clang` (the default) or `THP_WORKLOAD=cg`. Both compare
+Choose `THP_WORKLOAD=clang` (default) or `THP_WORKLOAD=llvm`. Both compare
 Relink, Relink with THP, and glibc in separate processes.
+
+Both workloads use Criterion sampling, with correctness checks and before/after
+page counts. Use `-- --test` for a functional check without statistical sampling.
 
 Clang requires `llvm-config` on `PATH`, a shared libclang and preprocessed simdjson
 3.12.3 input. Use matching
@@ -25,24 +28,21 @@ It prefers an unversioned
 `libclang.so` when available, otherwise the highest installed major version.
 All three workers use the same selected file, printed at startup.
 
-CG uses the serial NAS Parallel Benchmarks conjugate-gradient workload, whose
-large static sparse-matrix arrays exercise anonymous BSS:
+LLVM optimizes simdjson bitcode with `default<O3>` and emits a native object,
+exercising the large code mapping in libLLVM. It requires matching Clang/libLLVM
+versions (21.1.8 was tested); this workload initializes x86_64 or AArch64 targets:
 
 ```sh
-python3 benches/workloads/prepare.py cg  # Class B, about 427 MiB of BSS
-THP_WORKLOAD=cg taskset -c 0 cargo bench --bench thp --features std,version
-# Controlled anonymous-THP comparison; affects benchmark workers only:
-THP_WORKLOAD=cg THP_EXCEPT_ADVISED=1 taskset -c 0 \
-  cargo bench --bench thp --features std,version
-# Faster functional check with the smaller Class A:
-python3 benches/workloads/prepare.py cg --class A
-THP_WORKLOAD=cg NPB_CG_LIBRARY=target/thp-input/npb-cg/libnpb-cg-A.so \
-  cargo bench --bench thp --features std,version -- --test
+python3 benches/workloads/prepare.py llvm
+THP_WORKLOAD=llvm taskset -c 0 cargo bench --bench thp --features std,version
+THP_WORKLOAD=llvm cargo bench --bench thp --features std,version -- --test
 ```
 
-`NPB_CG_LIBRARY` overrides the default `target/thp-input/npb-cg/libnpb-cg-B.so`.
-Preparation requires Python 3, a C compiler (`CC`, default `cc`), and network access
-on the first run. The benchmark itself performs no downloads or compilation of inputs.
+`LLVM_LIBRARY` overrides `llvm-config --link-shared --libfiles`; `LLVM_INPUT`
+overrides `target/thp-input/simdjson.bc`. Only optimization and object emission
+are timed; IR setup, verification, output hashing and teardown are excluded.
+Outputs are checked before and after sampling. Object lengths and hashes must match across loaders. See the
+[input and validation details](workloads/README.md#llvm-optimization-and-code-generation).
 
 | Case | Loader |
 |---|---|
@@ -58,20 +58,10 @@ collapse, index creation, diagnostic checks, AST traversal, and translation-unit
 teardown are excluded. This measures compiler frontend work, not JSON parsing.
 The input defaults to `target/thp-input/simdjson.ii`; override with `SIMDJSON_INPUT`.
 
-CG preserves the original matrix setup, warmup, 15 (Class A) or 75 (Class B)
-inverse-power iterations, and numerical verification. The adapter suppresses
-progress printing and records the original kernel interval with a monotonic
-clock. Criterion measures this interval; matrix setup and verification are
-excluded. Every repetition reinitializes the matrix in the same resident BSS,
-checks NPB verification, and compares the final eigenvalue across repetitions
-and loaders. The initial run also reports kernel and whole-application time,
-including initialization and verification; library loading is excluded from both.
-
-Defaults: 1 s warmup, 5 s measurement; Clang uses 30 samples, CG uses 10 with flat
-sampling. Class B can take roughly 15–25 s per repetition on a fast machine,
-so a full three-loader run takes several minutes even with a short measurement
-time. Use Class A for quick checks. Criterion options are forwarded to all workers;
-results go to `target/criterion/thp_clang/` or `target/criterion/thp_cg/`. Output groups timings
+Defaults: 1 s warmup, 5 s requested measurement, and 30 Clang or 10 LLVM
+samples. Actual measurement time can exceed 5 s to meet the sample count.
+Criterion command-line options are forwarded, with results under
+`target/criterion/thp_clang/` or `target/criterion/thp_llvm/`. Output groups timings
 and before/after huge-page counts by case, then checks that all
 AST node counts and cursor-kind hashes match for Clang. Error diagnostics fail validation.
 These are structural sanity checks, not semantic-equivalence proofs. Compare
@@ -82,33 +72,79 @@ The mapping table reports MiB from `/proc/self/smaps`: `FilePmdMapped`,
 and are excluded from counts. Zero counts with no partial VMAs mean no PMD huge
 pages were observed at those snapshots. Counts cover the selected root library,
 including its BSS; dependencies and heap allocations are excluded. Both snapshots
-follow the initial validation run, so CG's BSS has already been initialized.
+follow the initial validation run.
 
 Collapse failures do not abort loading. Check actual page counts: default loaders
 may also use THP. THP policies choose an ELF-compatible load bias that maximizes
-executable coverage, then total read-only coverage; they can change alignment as
+executable coverage, then total non-writable coverage; they can change alignment as
 well as page backing. Separate processes still share the file cache, so timings
 alone do not isolate THP gains.
 
-`THP_EXCEPT_ADVISED=1` sets Linux's process-local
-[`PR_THP_DISABLE_EXCEPT_ADVISED`](https://www.kernel.org/doc/html/latest/admin-guide/mm/transhuge.html#process-thp-controls)
-for every worker before library loading. It prevents automatic, unadvised THP;
-it does not change global sysfs policy. Unsupported kernels fail explicitly.
-This provides a controlled comparison, not the incremental gain over an already
-THP-enabled system. For BSS, global `always` or `madvise` must still allow
-`MADV_HUGEPAGE`; under global `never`, BSS advice may have no effect. Always inspect
-actual page counts. Use the same process policy for baseline comparisons.
+`Loader::with_thp(ThpPolicy::Advise)` or `ThpPolicy::Collapse` selects the policy;
+the mapping backend supplies the size through `Mmap::thp_page_size()`. The default
+Linux backend reads and caches `/sys/kernel/mm/transparent_hugepage/hpage_pmd_size`.
+Missing or invalid sizes disable THP optimization without failing the load.
+Custom backends can provide their own size; the trait default is `None`.
 
-`Loader::with_thp(policy)` also enables `MADV_HUGEPAGE` for anonymous BSS at the
-same target size, including when the file policy is `Collapse`. BSS advice runs
+Both policies also enable `MADV_HUGEPAGE` for anonymous BSS at the same target
+size, including when the file policy is `Collapse`. BSS advice runs
 before relocation and constructors, allowing allocation on first write without
 synchronous collapse or eager page faults. Only complete huge pages inside
 writable BSS of file-mapped images are eligible; file tail pages are excluded.
 Overlapping LOADs receive advice on their final mappings. Sparse usage may increase
 RSS. Hosts already using anonymous THP by default may see no additional benefit.
 
+The same API supports inputs copied into anonymous memory, such as `ElfBinary`.
+All LOADs, including writable data and BSS, receive `MADV_HUGEPAGE` before copying.
+`Collapse` also attempts to merge complete huge pages of initialized contents
+after copying and before final segment protections. BSS is not synchronously
+collapsed. File-offset alignment is irrelevant to copied inputs; only destination
+addresses must align. Section arenas and borrowed mappings remain excluded.
+
 The `relink_thp` benchmark enables both; its page counts can therefore include BSS
 huge pages. Regenerate baselines from versions where `with_thp` affected files only.
+
+### THP figure
+
+The README figure uses measurements from commit `a451175`,
+collected on 2026-11-03: Ryzen 9 7945HX, Linux 7.0.11, glibc 2.43, Rust 1.96.0,
+CPU 2, system THP `always`, defrag `madvise`. The CPU governor remained `powersave`
+with `balance_performance`; no system settings or caches were reset.
+Libclang/libLLVM 21.1.8 process simdjson 3.12.3. Each backend/workload received
+one functional warmup before measurement, sharing a warm file cache.
+
+Execution uses the current Criterion harness: 1 s warmup, 5 s requested
+measurement, 30 Clang or 10 LLVM samples, one process per backend/workload.
+Actual measurement time exceeds 5 s when needed to collect the samples.
+The figure shows mean time and Criterion's 95% confidence interval; loading,
+collapse, setup, correctness checks and teardown are excluded. Both axes start
+at zero. The figure compares default Relink with `ThpPolicy::Collapse`.
+
+Instruction TLB counts come from separate `perf stat` runs with `--test`.
+Criterion 0.8.2 executes one test iteration; together with validation before and
+after, each worker performs exactly **three parses or compilations**. Two fresh
+processes per backend/workload run in forward then reverse loader order on CPU 2.
+All counters ran for 100% of the interval. Counts include the entire user-mode
+worker: loading, setup, validation and teardown. Their means have no confidence
+intervals. These are instruction TLB misses, not all TLB misses.
+THP changes mapping alignment as well as page backing,
+so the comparison does not isolate those effects.
+
+To collect counters after preparing the inputs and building the benchmark,
+use the executable printed by `cargo bench --bench thp --features std,version --no-run`:
+
+```sh
+# Repeat for clang / llvm and relink / relink_thp / glibc.
+# Set library to the matching libclang or libLLVM shared object.
+THP_WORKLOAD=clang _RELINK_THP_BACKEND=relink _RELINK_THP_LIBRARY=/path/to/library.so \
+  perf stat -e cycles:u,instructions:u,iTLB-load-misses:u,dTLB-load-misses:u -- \
+  taskset -c 2 /path/to/thp-executable --bench --test --noplot
+```
+
+Root-library file PMD coverage rose from 0 to 18 MiB for Clang and
+0 to 60 MiB for LLVM. In the timing runs, root-library RSS increased from
+21.0 to 26.8 MiB and from 62.6 to 80.9 MiB, respectively; dependencies and heap
+memory are excluded from those page counts.
 
 ## Library comparison
 

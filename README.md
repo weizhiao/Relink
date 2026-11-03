@@ -63,6 +63,29 @@ search dependencies. Misses include each API's error handling.
 Reproduce with `taskset -c 2 bash ci/bench.sh`. See the [benchmark guide](benches/README.md)
 for dependencies and measurement scope.
 
+**Transparent Huge Page Optimization**
+
+In these Clang / LLVM compilation workloads, enabling `ThpPolicy::Collapse`
+reduced **execution time by 1.1–5.4%** and **instruction TLB misses by about 99.95% in both workloads**.
+
+![Relink execution time and instruction TLB misses with and without THP](benches/figures/thp-execution-dark.svg#gh-dark-mode-only)
+![Relink execution time and instruction TLB misses with and without THP](benches/figures/thp-execution.svg#gh-light-mode-only)
+
+Execution shows means and 95% confidence intervals, excluding loading, page
+collapse, setup and validation. iTLB counts cover the whole user-mode worker,
+including those stages, and show means of two runs. Lower is better.
+
+| Configuration | Value |
+| --- | --- |
+| Date / commit | 2026-11-03 · `a451175` |
+| Environment | Ryzen 9 7945HX · Linux 7.0.11-arch1-1 x86_64 · glibc 2.43 · Rust 1.96.0 |
+| Workloads | libclang / libLLVM 21.1.8 · simdjson 3.12.3; Clang parsing/type-checking, LLVM O3 optimization/codegen |
+| THP | System policy `always`; default Relink versus `ThpPolicy::Collapse` |
+| Timing | Pinned to CPU 2; warm file cache; Criterion 1 s warmup, 5 s target measurement; 30 Clang / 10 LLVM samples |
+| TLB sampling | `perf stat`; 2 fresh processes per case, exactly 3 parses or compilations per process (including validation before/after) |
+
+See the [benchmark guide](benches/README.md#thp-figure) for reproduction, memory costs and measurement scope.
+
 ## Quick Start
 
 ```toml
