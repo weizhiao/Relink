@@ -2,15 +2,11 @@
 
 use super::{TlsInfo, TlsModuleId, TlsRegistry};
 use crate::{Result, TlsError};
-use alloc::{
-    alloc::{alloc_zeroed, dealloc, handle_alloc_error},
-    vec::Vec,
-};
-#[cfg(feature = "std")]
-use core::cell::{Cell, UnsafeCell};
+use alloc::alloc::{alloc, dealloc, handle_alloc_error, realloc};
 use core::{alloc::Layout, ptr::NonNull};
 
-// Owns only the allocation; template and module lifetimes stay with the caller.
+// The address is the first word; allocation metadata is only needed on teardown.
+#[repr(C)]
 struct TlsBlock {
     ptr: NonNull<u8>,
     layout: Layout,
@@ -19,6 +15,12 @@ struct TlsBlock {
 unsafe impl Send for TlsBlock {}
 
 impl TlsBlock {
+    // Real blocks allocate at least one byte, so a zero-sized layout owns nothing.
+    const EMPTY: Self = Self {
+        ptr: NonNull::dangling(),
+        layout: Layout::new::<()>(),
+    };
+
     fn new(info: TlsInfo, image: &[u8]) -> Result<Self> {
         info.validate()?;
         if image.len() != info.filesz {
@@ -26,60 +28,206 @@ impl TlsBlock {
         }
         let layout = Layout::from_size_align(info.memsz.max(1), info.align.max(1))
             .map_err(|_| TlsError::InvalidInfo)?;
-        let ptr = NonNull::new(unsafe { alloc_zeroed(layout) })
-            .unwrap_or_else(|| handle_alloc_error(layout));
-        unsafe { core::ptr::copy_nonoverlapping(image.as_ptr(), ptr.as_ptr(), image.len()) };
+        let ptr =
+            NonNull::new(unsafe { alloc(layout) }).unwrap_or_else(|| handle_alloc_error(layout));
+        // Initialized bytes come from the template; only BSS needs zeroing.
+        unsafe {
+            core::ptr::copy_nonoverlapping(image.as_ptr(), ptr.as_ptr(), image.len());
+            ptr.as_ptr()
+                .add(image.len())
+                .write_bytes(0, info.memsz - image.len());
+        }
         Ok(Self { ptr, layout })
     }
 }
 
 impl Drop for TlsBlock {
     fn drop(&mut self) {
-        unsafe { dealloc(self.ptr.as_ptr(), self.layout) };
+        if self.layout.size() != 0 {
+            unsafe { dealloc(self.ptr.as_ptr(), self.layout) };
+        }
     }
 }
 
-/// Per-thread cache of dynamically allocated TLS blocks.
+#[repr(C)]
+struct DtvSlot {
+    id: TlsModuleId,
+    block: TlsBlock,
+}
+
+impl DtvSlot {
+    const EMPTY: Self = Self {
+        id: TlsModuleId::RESERVED,
+        block: TlsBlock::EMPTY,
+    };
+}
+
+// One allocation holds the validity header followed by initialized slots. A
+// published pointer is enough to check the generation and index the slots;
+// no intermediate owner or Vec backing-pointer load is needed.
+#[repr(C)]
+struct DtvHeader {
+    generation: usize,
+    len: usize,
+    slots: [DtvSlot; 0],
+}
+
+const EMPTY_DTV: DtvHeader = DtvHeader {
+    generation: 0,
+    len: 0,
+    slots: [],
+};
+const SLOTS_OFFSET: usize = core::mem::offset_of!(DtvHeader, slots);
+
+impl DtvHeader {
+    #[inline]
+    // The pointer must retain provenance for the whole allocation, not be
+    // derived from a reference narrowed to the header. The table must be live
+    // and immutable for the duration of this leaf lookup.
+    unsafe fn get(table: *const Self, mod_id: TlsModuleId) -> Option<NonNull<u8>> {
+        // A zero slot wraps to usize::MAX and is rejected by the bounds check.
+        let index = (mod_id.get() & TlsModuleId::SLOT_MASK).wrapping_sub(1);
+        if index >= unsafe { (*table).len } {
+            return None;
+        }
+        // SAFETY: Every header with nonzero len is followed by that many initialized
+        // slots in the same allocation. EMPTY_DTV has no slots and cannot get here.
+        let slot = unsafe {
+            &*table
+                .cast::<u8>()
+                .add(SLOTS_OFFSET)
+                .cast::<DtvSlot>()
+                .add(index)
+        };
+        (slot.id == mod_id).then_some(slot.block.ptr)
+    }
+
+    #[inline]
+    unsafe fn lookup(table: *const Self, mod_id: TlsModuleId, generation: usize) -> DtvLookup {
+        if unsafe { (*table).generation } != generation {
+            return DtvLookup::Stale;
+        }
+        unsafe { Self::get(table, mod_id) }.map_or(DtvLookup::Missing, DtvLookup::Found)
+    }
+}
+
+/// Owns a per-thread cache of dynamically allocated TLS blocks.
 ///
+/// One allocation contains the DTV header followed by its initialized slots.
 /// Static and external storage remain with their providers. This type does not
 /// define an architecture's ABI-visible DTV layout and retains no module owners.
 /// IDs must use [`super::TlsRegistry`]'s slot/incarnation encoding. Resolvers
 /// with another ID format must provide their own thread storage.
 pub struct ThreadDtv {
-    generation: usize,
-    blocks: Vec<Option<(TlsModuleId, TlsBlock)>>,
+    ptr: NonNull<DtvHeader>,
 }
 
+// SAFETY: Moving the owner transfers the allocation and all its TLS blocks.
+// The default runtime only publishes borrowed pointers within the owning thread.
+unsafe impl Send for ThreadDtv {}
+
 impl ThreadDtv {
-    /// Creates an empty per-thread DTV.
-    pub const fn new() -> Self {
+    /// Allocates an empty per-thread DTV with an initialized header.
+    pub fn new() -> Self {
+        let layout = Self::layout(0);
+        let allocation =
+            NonNull::new(unsafe { alloc(layout) }).unwrap_or_else(|| handle_alloc_error(layout));
+        let ptr = allocation.cast::<DtvHeader>();
+        unsafe {
+            ptr.as_ptr().write(EMPTY_DTV);
+        }
+        Self { ptr }
+    }
+
+    fn layout(len: usize) -> Layout {
+        let slots = Layout::array::<DtvSlot>(len).expect("TLS DTV capacity overflow");
+        let (layout, offset) = Layout::new::<DtvHeader>().extend(slots).unwrap();
+        debug_assert_eq!(offset, SLOTS_OFFSET);
+        layout.pad_to_align()
+    }
+
+    #[allow(dead_code)]
+    fn into_raw(self) -> *mut DtvHeader {
+        let ptr = self.ptr.as_ptr();
+        core::mem::forget(self);
+        ptr
+    }
+
+    // SAFETY: The pointer must transfer sole ownership of a complete allocation
+    // created by this type, with its full provenance and initialized slot count.
+    #[allow(dead_code)]
+    unsafe fn from_raw(ptr: *mut DtvHeader) -> Self {
         Self {
-            generation: 0,
-            blocks: Vec::new(),
+            ptr: unsafe { NonNull::new_unchecked(ptr) },
+        }
+    }
+
+    fn len(&self) -> usize {
+        unsafe { self.ptr.as_ref() }.len
+    }
+
+    fn slots_mut(&mut self) -> &mut [DtvSlot] {
+        // Derive the trailing slice from the allocation pointer, never from a
+        // reference to the fixed-size header or its zero-length array field.
+        unsafe {
+            core::slice::from_raw_parts_mut(
+                self.ptr
+                    .as_ptr()
+                    .cast::<u8>()
+                    .add(SLOTS_OFFSET)
+                    .cast::<DtvSlot>(),
+                self.len(),
+            )
         }
     }
 
     /// Returns the registry generation represented by this DTV.
     #[inline]
-    pub const fn generation(&self) -> usize {
-        self.generation
+    pub fn generation(&self) -> usize {
+        unsafe { self.ptr.as_ref() }.generation
+    }
+
+    fn ensure_len(&mut self, len: usize) {
+        let old_len = self.len();
+        if old_len >= len {
+            return;
+        }
+        let capacity = len
+            .checked_next_power_of_two()
+            .expect("TLS DTV capacity overflow")
+            .max(4);
+        let old_layout = Self::layout(old_len);
+        let new_layout = Self::layout(capacity);
+        // Alignment is unchanged. On failure the owner still holds the old
+        // allocation; after success initialization below cannot unwind.
+        let allocation = NonNull::new(unsafe {
+            realloc(self.ptr.as_ptr().cast(), old_layout, new_layout.size())
+        })
+        .unwrap_or_else(|| handle_alloc_error(new_layout));
+        self.ptr = allocation.cast();
+        unsafe {
+            let slots = allocation.as_ptr().add(SLOTS_OFFSET).cast::<DtvSlot>();
+            for index in old_len..capacity {
+                slots.add(index).write(DtvSlot::EMPTY);
+            }
+            self.ptr.as_mut().len = capacity;
+        }
     }
 
     /// Discards blocks whose full IDs are absent from the associated registry.
     /// Hold the registry's read lock through this call when it is shared.
-    /// This only frees TLS allocations; it does not retain owners or invoke providers.
+    /// This only frees TLS blocks; it does not retain owners or invoke providers.
     pub fn sync(&mut self, registry: &TlsRegistry) {
-        if self.generation == registry.generation() {
+        if self.generation() == registry.generation() {
             return;
         }
-        for slot in &mut self.blocks {
-            if let Some((id, _)) = slot
-                && !registry.contains(*id)
-            {
-                *slot = None;
+        self.ensure_len(registry.slot_count());
+        for slot in self.slots_mut() {
+            if !slot.id.is_reserved() && !registry.contains(slot.id) {
+                *slot = DtvSlot::EMPTY;
             }
         }
-        self.generation = registry.generation();
+        unsafe { self.ptr.as_mut() }.generation = registry.generation();
     }
 
     /// Returns a cached block, initializing it from template bytes on first use.
@@ -99,19 +247,36 @@ impl ThreadDtv {
         }
         let index = mod_id.slot().ok_or(TlsError::InvalidModuleId { mod_id })?;
         let block = TlsBlock::new(info, image)?;
-        if self.blocks.len() <= index {
-            self.blocks.resize_with(index + 1, || None);
-        }
+        self.ensure_len(index + 1);
         let ptr = block.ptr;
-        self.blocks[index] = Some((mod_id, block));
+        self.slots_mut()[index] = DtvSlot { id: mod_id, block };
         Ok(ptr)
     }
 
-    /// Returns an already allocated dynamic block.
+    /// Returns an already allocated dynamic block from the local cache.
+    ///
+    /// This does not check the registry generation or whether the module is still
+    /// registered. Use [`Self::lookup`] to check a generation, or [`Self::sync`]
+    /// to remove blocks for unregistered modules. The pointer retains no ownership
+    /// and must not be used after the block is replaced, removed, or dropped.
     #[inline]
     pub fn get(&self, mod_id: TlsModuleId) -> Option<NonNull<u8>> {
-        let (id, block) = self.blocks.get(mod_id.slot()?)?.as_ref()?;
-        (*id == mod_id).then_some(block.ptr)
+        unsafe { DtvHeader::get(self.ptr.as_ptr(), mod_id) }
+    }
+
+    /// Queries a cached block relative to a registry generation.
+    ///
+    /// `generation` must come from the same registry used with [`Self::sync`].
+    /// A version mismatch returns [`DtvLookup::Stale`] even if a local block
+    /// exists. This method does not lock, synchronize, or allocate storage.
+    ///
+    /// A hit is valid only relative to the supplied generation; it does not keep
+    /// the registry unchanged or retain the module or block. The caller must
+    /// uphold the module and thread lifetimes and stop using the pointer before
+    /// the block is replaced, removed by synchronization, or dropped.
+    #[inline]
+    pub fn lookup(&self, mod_id: TlsModuleId, generation: usize) -> DtvLookup {
+        unsafe { DtvHeader::lookup(self.ptr.as_ptr(), mod_id, generation) }
     }
 }
 
@@ -122,129 +287,58 @@ impl Default for ThreadDtv {
     }
 }
 
-#[cfg_attr(not(feature = "std"), allow(dead_code))]
-pub(super) enum DtvLookup {
-    Missing,
-    Stale,
-    Found(NonNull<u8>),
-}
-
-#[cfg(feature = "std")]
-struct LocalDtv {
-    // Some(generation) is readable; None excludes access during an update.
-    // Some(0) represents the initial empty DTV, not an update in progress.
-    published_generation: Cell<Option<usize>>,
-    dtv: UnsafeCell<ThreadDtv>,
-}
-
-#[cfg(feature = "std")]
-impl LocalDtv {
-    const fn new() -> Self {
-        Self {
-            published_generation: Cell::new(Some(0)),
-            dtv: UnsafeCell::new(ThreadDtv::new()),
-        }
-    }
-
-    #[inline]
-    fn lookup(&self, mod_id: TlsModuleId, generation: usize) -> DtvLookup {
-        if generation == 0 {
-            return DtvLookup::Missing;
-        }
-        if self.published_generation.get() != Some(generation) {
-            return DtvLookup::Stale;
-        }
-        // SAFETY: A matching nonzero generation is published only when there is
-        // no mutable DTV reference. Updates unpublish before borrowing, including
-        // while allocation/free can reenter. This leaf query cannot allocate,
-        // call user code or drop values; only a copied block pointer escapes.
-        let dtv = unsafe { &*self.dtv.get() };
-        dtv.get(mod_id).map_or(DtvLookup::Missing, DtvLookup::Found)
-    }
-
-    fn with_mut<R>(&self, f: impl FnOnce(&mut ThreadDtv) -> R) -> R {
-        assert!(
-            self.published_generation.replace(None).is_some(),
-            "reentrant managed TLS storage update"
-        );
-        let _update = DtvUpdate(self);
-        // SAFETY: None excludes both nested mutations and reentrant lookups
-        // that could create shared references into the DTV. The closure
-        // cannot return a reference borrowing this argument. The guard publishes
-        // again after that reference ends, including when the closure unwinds.
-        f(unsafe { &mut *self.dtv.get() })
-    }
-}
-
-#[cfg(feature = "std")]
-struct DtvUpdate<'a>(&'a LocalDtv);
-
-#[cfg(feature = "std")]
-impl Drop for DtvUpdate<'_> {
+impl Drop for ThreadDtv {
     fn drop(&mut self) {
-        // SAFETY: The closure and all references it borrowed have ended. Neither
-        // reading the generation nor publishing it can reenter.
-        let generation = unsafe { &*self.0.dtv.get() }.generation();
-        self.0.published_generation.set(Some(generation));
+        let layout = Self::layout(self.len());
+        // The runtime withdraws published pointers before dropping this owner.
+        // The zero-length field owns no slots: drop the actual trailing slice,
+        // then release the entire allocation with its original layout.
+        unsafe {
+            core::ptr::drop_in_place(self.slots_mut());
+            dealloc(self.ptr.as_ptr().cast(), layout);
+        }
     }
+}
+
+/// Result of querying a DTV cache with [`ThreadDtv::lookup`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DtvLookup {
+    /// No matching allocated block is available.
+    Missing,
+    /// The DTV generation differs from the requested registry generation.
+    Stale,
+    /// A matching block exists. The pointer does not retain its ownership.
+    Found(NonNull<u8>),
 }
 
 cfg_if::cfg_if! {
     if #[cfg(all(feature = "std", any(target_os = "linux", target_os = "android")))] {
         mod pthread {
-            //! Heap-owned DTV storage, reclaimed on the second pthread destructor round.
-            //!
-            //! std TLS only caches a borrowed pointer; reclaiming that cache cannot free the
-            //! DTV. Delaying one round covers first-round runtime cleanup, but does not promise
-            //! to outlive arbitrary, repeatedly rearmed foreign destructors. Access after
-            //! second-round reclamation is unsupported.
+            //! The pthread key owns one complete DTV table. Native TLS caches
+            //! only its borrowed header pointer. Updates temporarily transfer
+            //! ownership to a guard; the key contains UPDATING until publication.
+            //! Reclamation remains delayed to the second destructor round.
 
-            use super::{DtvLookup, LocalDtv, Result, ThreadDtv, TlsError, TlsModuleId};
-            use alloc::boxed::Box;
-            use core::{cell::Cell, ffi::c_void, ptr::NonNull};
+            use super::{DtvHeader, DtvLookup, EMPTY_DTV, Result, ThreadDtv, TlsError, TlsModuleId};
+            use core::{cell::Cell, ffi::c_void, mem::ManuallyDrop};
 
-            // Only the pthread slot carries this tag; the std cache holds an untagged
-            // pointer so ordinary lookups do not need to mask it.
             const RETIRING: usize = 1;
-            const _: () = assert!(core::mem::align_of::<LocalDtv>() > RETIRING);
+            const DESTROYED: *mut DtvHeader = core::ptr::without_provenance_mut(1);
+            const UPDATING: *mut DtvHeader = core::ptr::without_provenance_mut(2);
+            const _: () = assert!(core::mem::align_of::<DtvHeader>() > 2);
 
-            // Never dereferenced. Blocks reentry while the DTV allocation is being freed.
-            const DESTROYED: *mut LocalDtv = core::ptr::without_provenance_mut(RETIRING);
-
+            // EMPTY_DTV is a real immutable zero-length header, not a nullable
+            // pointer. The hot path needs only generation, bounds and full-ID checks.
             std::thread_local! {
-                static DTV_CACHE: Cell<*mut LocalDtv> = const { Cell::new(core::ptr::null_mut()) };
+                static DTV_TABLE: Cell<*const DtvHeader> = const { Cell::new(&EMPTY_DTV) };
             }
 
-            #[inline]
-            fn cache_dtv(ptr: *mut LocalDtv) {
-                let _ = DTV_CACHE.try_with(|cache| cache.set(ptr));
+            fn publish_table(ptr: *const DtvHeader) {
+                let _ = DTV_TABLE.try_with(|table| table.set(ptr));
             }
 
             // The key lives for the runtime's lifetime. Failed creation can be retried.
             static KEY: spin::Once<libc::pthread_key_t> = spin::Once::new();
-
-            #[inline]
-            fn current_dtv<const CACHED_ONLY: bool>() -> *mut LocalDtv {
-                let ptr = DTV_CACHE.try_with(Cell::get).unwrap_or(core::ptr::null_mut());
-                if CACHED_ONLY || !ptr.is_null() {
-                    return ptr;
-                }
-                // The pthread slot is authoritative even when std has reclaimed the cache.
-                let Some(&key) = KEY.get() else {
-                    return core::ptr::null_mut();
-                };
-                let ptr = unsafe { libc::pthread_getspecific(key) }.cast::<LocalDtv>();
-                // Preserve the terminal sentinel; only a live pointer's tag is stripped.
-                let ptr = if ptr == DESTROYED {
-                    ptr
-                } else {
-                    ptr.map_addr(|addr| addr & !RETIRING)
-                };
-                if !ptr.is_null() {
-                    cache_dtv(ptr);
-                }
-                ptr
-            }
 
             pub(in crate::tls) fn ensure_supported() -> Result<()> {
                 KEY.try_call_once(|| {
@@ -254,37 +348,38 @@ cfg_if::cfg_if! {
                         return Err(TlsError::ThreadStorageFailed { code }.into());
                     }
                     Ok(key)
-                })
-                .map(|_| ())
+                }).map(|_| ())
             }
 
-            fn rearm(value: *mut LocalDtv) {
-                // pthread clears the slot before calling destroy. Restore either its live
-                // tagged pointer or its terminal marker before any allocator can reenter us.
+            fn rearm(value: *mut DtvHeader) {
                 let code = unsafe { libc::pthread_setspecific(*KEY.get().unwrap(), value.cast()) };
                 if code != 0 {
-                    // Losing this state could resurrect a DTV during teardown. No caller can
-                    // receive an error from a pthread destructor, so fail closed.
+                    // Losing the ownership or lifecycle marker could double-free
+                    // or resurrect a table. No caller can recover from that state.
                     std::process::abort();
                 }
             }
 
             unsafe extern "C" fn destroy(value: *mut c_void) {
-                let ptr = value.cast::<LocalDtv>();
+                let ptr = value.cast::<DtvHeader>();
                 if ptr == DESTROYED {
                     return;
+                }
+                if ptr == UPDATING {
+                    std::process::abort();
                 }
                 if ptr.addr() & RETIRING == 0 {
                     rearm(ptr.map_addr(|addr| addr | RETIRING));
                     return;
                 }
-                // SAFETY: stripping the tag restores the pointer from Box::into_raw,
-                // preserving its provenance. The second callback consumes it exactly once.
                 let ptr = ptr.map_addr(|addr| addr & !RETIRING);
+                // Unpublish before running any allocation destructors. Non-allocating
+                // reentrant queries see no block, and new updates are rejected.
                 rearm(DESTROYED);
-                cache_dtv(DESTROYED);
-                // Both access paths now reject reentry, including attempts to create a DTV.
-                unsafe { drop(Box::from_raw(ptr)) };
+                publish_table(&EMPTY_DTV);
+                // SAFETY: The key held sole ownership. Stripping the tag preserves
+                // allocation provenance, and this consumes that ownership once.
+                unsafe { drop(ThreadDtv::from_raw(ptr)) };
             }
 
             #[inline]
@@ -292,72 +387,74 @@ cfg_if::cfg_if! {
                 mod_id: TlsModuleId,
                 generation: usize,
             ) -> DtvLookup {
-                // The ELF ABI entry queries only the cached pointer to remain a leaf on
-                // native-TLS targets. Ordinary resolution can fall back to the pthread slot.
-                let ptr = current_dtv::<CACHED_ONLY>();
-                // Null and the destroyed sentinel must never be dereferenced.
-                if ptr.addr() <= DESTROYED.addr() {
+                // The published table is immutable until the lookup returns.
+                let cached = DTV_TABLE.try_with(|table| unsafe {
+                    DtvHeader::lookup(table.get(), mod_id, generation)
+                }).unwrap_or(DtvLookup::Missing);
+                match cached {
+                    hit @ DtvLookup::Found(_) => return hit,
+                    other if CACHED_ONLY => return other,
+                    _ => {}
+                }
+                // The pthread key remains authoritative if std TLS is unavailable.
+                let Some(&key) = KEY.get() else { return DtvLookup::Missing; };
+                let ptr = unsafe { libc::pthread_getspecific(key) }.cast::<DtvHeader>();
+                if ptr.addr() <= UPDATING.addr() {
                     return DtvLookup::Missing;
                 }
-                // Only this thread accesses its slot; LocalDtv exposes only a published generation.
-                unsafe { &*ptr }.lookup(mod_id, generation)
+                let ptr = ptr.map_addr(|addr| addr & !RETIRING);
+                publish_table(ptr);
+                unsafe { DtvHeader::lookup(ptr, mod_id, generation) }
             }
 
-            #[inline]
+            struct Update {
+                dtv: ManuallyDrop<ThreadDtv>,
+                retiring: bool,
+            }
+
+            impl Drop for Update {
+                fn drop(&mut self) {
+                    // Transfer the whole allocation back to the pthread key.
+                    let table = unsafe { ManuallyDrop::take(&mut self.dtv) };
+                    let ptr = table.into_raw();
+                    // Preserve the destructor round even when a callback grows the table.
+                    let tagged = if self.retiring {
+                        ptr.map_addr(|addr| addr | RETIRING)
+                    } else {
+                        ptr
+                    };
+                    rearm(tagged);
+                    publish_table(ptr);
+                }
+            }
+
             pub(in crate::tls) fn with_dtv<R>(f: impl FnOnce(&mut ThreadDtv) -> R) -> R {
-                let ptr = current_dtv::<false>();
+                let key = *KEY.get().expect("managed TLS must be registered before resolving it");
+                let ptr = unsafe { libc::pthread_getspecific(key) }.cast::<DtvHeader>();
                 assert_ne!(ptr, DESTROYED, "managed TLS thread storage has been destroyed");
-                let dtv = match NonNull::new(ptr) {
-                    Some(dtv) => dtv,
-                    None => create_dtv(),
+                assert_ne!(ptr, UPDATING, "reentrant managed TLS storage update");
+                let retiring = ptr.addr() & RETIRING != 0;
+                let ptr = ptr.map_addr(|addr| addr & !RETIRING);
+                // Withdraw both published references before constructing a mutable
+                // owner. A rejected nested update cannot take or republish this table.
+                rearm(UPDATING);
+                publish_table(&EMPTY_DTV);
+                let mut update = Update {
+                    // SAFETY: The key transferred its sole ownership to this guard.
+                    dtv: ManuallyDrop::new(if ptr.is_null() {
+                        ThreadDtv::new()
+                    } else {
+                        unsafe { ThreadDtv::from_raw(ptr) }
+                    }),
+                    retiring,
                 };
-                unsafe { dtv.as_ref() }.with_mut(f)
+                // The closure cannot return a reference borrowing the table. The
+                // guard republishes the current allocation, also after unwinding.
+                f(&mut update.dtv)
             }
-
-            #[cold]
-            #[inline(never)]
-            fn create_dtv() -> NonNull<LocalDtv> {
-                // Managed TLS registration creates the key before publishing a module ID.
-                let key = *KEY
-                    .get()
-                    .expect("managed TLS must be registered before resolving it");
-                // Recursive creation from an allocator callback is unsupported. Until
-                // installation succeeds, non-allocating queries still see an empty slot.
-                let mut owned = Box::new(LocalDtv::new());
-                let ptr = NonNull::from(&mut *owned);
-                let code = unsafe { libc::pthread_setspecific(key, ptr.as_ptr().cast()) };
-                assert_eq!(code, 0, "failed to install managed TLS thread storage");
-                // Transfer ownership only after successful installation.
-                let _ = Box::into_raw(owned);
-                cache_dtv(ptr.as_ptr());
-                ptr
-            }
-
         }
 
         pub(super) use pthread::{ensure_supported, lookup_dtv, with_dtv};
-    } else if #[cfg(feature = "std")] {
-        std::thread_local! {
-            static DTV: LocalDtv = const { LocalDtv::new() };
-        }
-
-        pub(super) fn ensure_supported() -> Result<()> {
-            Ok(())
-        }
-
-        #[inline]
-        pub(super) fn lookup_dtv<const CACHED_ONLY: bool>(
-            mod_id: TlsModuleId,
-            generation: usize,
-        ) -> DtvLookup {
-            DTV.try_with(|dtv| dtv.lookup(mod_id, generation))
-                .unwrap_or(DtvLookup::Missing)
-        }
-
-        #[inline]
-        pub(super) fn with_dtv<R>(f: impl FnOnce(&mut ThreadDtv) -> R) -> R {
-            DTV.with(|dtv| dtv.with_mut(f))
-        }
     } else {
         pub(super) fn ensure_supported() -> Result<()> {
             Err(TlsError::ResolverUnsupported.into())
@@ -371,7 +468,7 @@ cfg_if::cfg_if! {
         }
 
         pub(super) fn with_dtv<R>(_f: impl FnOnce(&mut ThreadDtv) -> R) -> R {
-            panic!("managed TLS thread storage requires std")
+            panic!("managed TLS thread storage requires std on Linux/Android")
         }
     }
 }

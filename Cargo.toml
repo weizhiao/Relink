@@ -113,6 +113,11 @@ name = "thp"
 harness = false
 required-features = ["std", "version"]
 
+[[bench]]
+name = "tls"
+harness = false
+required-features = ["std", "version"]
+
 [[test]]
 name = "linker"
 path = "tests/linker/main.rs"

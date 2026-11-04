@@ -126,6 +126,10 @@ impl TlsRegistry {
         self.generation
     }
 
+    pub(super) fn slot_count(&self) -> usize {
+        self.slots.len()
+    }
+
     /// Registers a provider in this runtime's module-ID namespace.
     ///
     /// The borrowed owner ensures that a failed registration cannot destroy the

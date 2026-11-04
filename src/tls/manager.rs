@@ -208,8 +208,8 @@ unsafe impl TlsProvider for ManagedTls {
 fn get_or_init_dynamic(context: &TlsContext, image: &[u8]) -> Result<NonNull<u8>> {
     let mod_id = context.binding().mod_id();
     with_dtv(|dtv| {
-        if dtv.generation() == GLOBAL_GENERATION.load(Ordering::Acquire)
-            && let Some(base) = dtv.get(mod_id)
+        if let DtvLookup::Found(base) =
+            dtv.lookup(mod_id, GLOBAL_GENERATION.load(Ordering::Acquire))
         {
             return Ok(base);
         }

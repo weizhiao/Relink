@@ -7,7 +7,7 @@
 //! [`TlsModule`] is borrowed metadata; [`TlsTemplate`] owns initialization bytes
 //! independently of the ELF image.
 //!
-//! Default managed dynamic TLS requires `std`.
+//! Default managed dynamic TLS requires `std` on Linux/Android.
 //! Other environments must supply a [`TlsResolver`] with their own thread lifecycle.
 //! Static TLS and custom providers do not require the default thread storage.
 //! On Linux/Android, managed blocks are reclaimed in the second pthread destructor
@@ -37,7 +37,7 @@ pub use defs::{
     TlsBinding, TlsDescBinding, TlsDescRequest, TlsDescSetup, TlsIndex, TlsInfo, TlsModuleId,
     TlsRequest, TlsTemplate, TlsTpOffset,
 };
-pub use dtv::ThreadDtv;
+pub use dtv::{DtvLookup, ThreadDtv};
 pub use manager::DefaultTlsResolver;
 pub use module::{TlsModule, TlsRegistration};
 pub use registry::{TlsContext, TlsOwner, TlsRegistry, TlsRegistryEntry};

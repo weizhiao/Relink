@@ -3,6 +3,46 @@
 Requires Linux/glibc. Use a fixed CPU affinity on an idle machine and regenerate
 baselines after harness changes.
 
+## TLS access
+
+On Linux/glibc x86_64, compare Relink's default TLS resolver with glibc using
+the same small shared library. Requires a GCC-compatible C compiler (`CC`,
+default `cc`) supporting `-mtls-dialect=gnu`.
+
+```sh
+# Replace 2 with an available CPU; child processes and threads inherit affinity.
+taskset -c 2 cargo bench --bench tls --features std,version
+cargo bench --bench tls --features std,version -- --test
+# Criterion options and filters are forwarded to both loader workers.
+taskset -c 2 cargo bench --bench tls --features std,version -- first_access
+```
+
+The fixture is compiled once per invocation, outside measurement, and copied into
+10 separately loaded modules, each with its own 8-byte initialized TLS counter.
+Both loaders use the identical general-dynamic TLS access sequence and eager
+symbol binding, in separate processes. The shared libraries remain under
+`target/tls-bench/<pid>/`.
+
+| Case | Measured work |
+| --- | --- |
+| `hot_10_modules` | Round-robin calls to all 10 modules after initialization: function calls, TLS address resolution, reads and increments. |
+| `first_access_10_modules` | One increment per module in each fresh thread: first TLS address resolution and block initialization for all 10 modules, including per-thread resolver bookkeeping. |
+
+For `first_access_10_modules`, timestamps are taken inside the new thread. Thread creation,
+join, TLS destruction and correctness checks are excluded; the clock is warmed
+before timing. Timer overhead remains included and is not subtracted. This is
+first access to each module in a thread, not a cold instruction/data-cache test.
+Each thread must observe every module's initial value and its own incremented value, and
+preflight checks verify that a child cannot modify its parent's TLS counter.
+No TLS lookup prewarms the measured thread's fixture modules before the first access.
+
+Both cases use 10 modules with independent initial state. Reported latency covers
+10 calls, while Criterion's element throughput counts individual accesses.
+
+Criterion defaults are 1 s warmup, 2 s requested measurement and 30 samples.
+Results go to `target/criterion/tls_access/`. These cases do not measure module
+load/unload, static TLS, TLSDESC, or concurrent-thread scalability.
+
 ## THP execution
 
 Choose `THP_WORKLOAD=clang` (default) or `THP_WORKLOAD=llvm`. Both compare

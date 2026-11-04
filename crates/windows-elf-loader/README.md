@@ -48,5 +48,6 @@ fn main() {
 # Note
 Here are the translated notes:
 * You need to manually handle the ELF dynamic library dependencies.
+* The default resolver does not provide managed dynamic TLS on Windows; ELF libraries that require it need a custom TLS resolver/provider.
 * Do not directly use syscalls within ELF dynamic libraries.
 * ABI conversion is required at the calling boundary between ELF dynamic libraries and Windows programs, as demonstrated in the example.
