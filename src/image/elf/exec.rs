@@ -222,10 +222,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
     /// Returns the executable identity used for diagnostics.
     pub fn name(&self) -> &[u8] {
-        match self {
-            RawExec::Dynamic(image) => image.name(),
-            RawExec::Static(image) => image.name(),
-        }
+        self.path().file_name()
     }
 
     /// Returns the entry point of the executable.
@@ -359,10 +356,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     /// Returns the executable identity used for diagnostics.
     #[inline]
     pub fn name(&self) -> &[u8] {
-        match &self.inner {
-            LoadedExecInner::Dynamic(module) => module.name(),
-            LoadedExecInner::Static(static_image) => static_image.name(),
-        }
+        self.path().file_name()
     }
 
     /// Returns whether `addr` is inside one of this executable's mapped slices.
@@ -383,13 +377,9 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
     /// Returns whether this executable was loaded as a static binary.
     pub fn is_static(&self) -> bool {
-        match &self.inner {
-            LoadedExecInner::Dynamic(_) => false,
-            LoadedExecInner::Static(_) => true,
-        }
+        matches!(&self.inner, LoadedExecInner::Static(_))
     }
 
-    /// Returns a reference to the core ELF object if this is a dynamic executable.
     /// Returns the loaded dynamic core, or `None` for static executables.
     pub fn core_ref(&self) -> Option<&LoadedCore<D, Arch, R, Tls>> {
         match &self.inner {

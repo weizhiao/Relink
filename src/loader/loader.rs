@@ -22,10 +22,9 @@ use core::{marker::PhantomData, mem::MaybeUninit, ptr};
 /// # Examples
 ///
 /// ```no_run
-/// use elf_loader::{Loader, Relocator};
+/// use elf_loader::{AddressSpaceId, Domain, Loader, Relocator};
 ///
 /// let config = Loader::new();
-/// use elf_loader::{AddressSpaceId, Domain};
 /// let domain = Domain::native(AddressSpaceId::PROCESS);
 /// let mut loader = config.run(domain);
 /// let raw = loader.load_dylib("path/to/liba.so").unwrap();
@@ -201,31 +200,19 @@ where
 
     /// Configures transparent huge pages for mapped or copied ELF images.
     ///
-    /// No policy is configured by default, so no advice is sent. The policy
-    /// applies after mapping to complete pages inside non-writable
-    /// LOAD file contents. Writable anonymous BSS always receives `MADV_HUGEPAGE`,
-    /// including with [`ThpPolicy::Collapse`], before relocation and constructors.
-    /// Copied inputs receive `MADV_HUGEPAGE` for all LOADs before copying, including
-    /// writable contents and BSS. `Collapse` also attempts to collapse initialized
-    /// contents after copying, before final segment protections.
-    /// Sparse usage may increase resident memory. Section arenas and borrowed
-    /// mappings are excluded. For overlapping file LOADs, advice applies to the
-    /// final mappings.
+    /// No policy is configured by default. See [`ThpPolicy`] for which file,
+    /// copied, and BSS ranges receive advice and when it is applied.
+    /// Section arenas and borrowed mappings are excluded.
     ///
-    /// The target size comes from [`Mmap::thp_page_size`]. Linux's default backend
-    /// reads and caches `/sys/kernel/mm/transparent_hugepage/hpage_pmd_size`.
-    /// An unavailable size disables advice and additional alignment. These policies
-    /// may increase image alignment while preserving ELF alignment requirements.
-    /// File mappings choose a load bias favoring executable coverage, then total
-    /// non-writable coverage; copied inputs align the load bias without file-offset
-    /// constraints.
-    /// Base page size, permissions, and relative segment layout are unchanged.
-    /// The target size guides alignment and range selection; the kernel chooses
-    /// the actual huge-page size.
+    /// The target size comes from [`Mmap::thp_page_size`]. If unavailable, the
+    /// loader skips THP alignment and advice. Otherwise the policy may increase
+    /// image alignment while preserving ELF alignment and relative segment layout.
+    /// The kernel chooses the actual huge-page size; sparse usage may increase
+    /// resident memory.
     ///
     /// Mapping failures, including failure to satisfy increased alignment, are
     /// returned without retrying at a smaller alignment. Advice failures do not
-    /// fail a load. See [`ThpPolicy`] for the effects of each policy.
+    /// fail a load.
     ///
     /// ```
     /// use elf_loader::{Loader, os::ThpPolicy};

@@ -65,17 +65,11 @@ where
             .map(|id| context.committed.module_slot(id))
             .transpose()?;
         let key = self.linker.resolver.root_key(&root);
-        let existing = PreparedLoad::visible(context, key).or_else(|| {
-            let canonical = self.linker.resolver.normalize_key(key);
-            (canonical != key)
-                .then(|| PreparedLoad::visible(context, canonical))
-                .flatten()
-        });
-        if let Some(prepared) = existing {
+        if let Some(prepared) = self.visible_root(context, key) {
             return Ok(prepared);
         }
         let key = ModuleKey::from(key);
-        let mut session = ResolveSession::new();
+        let mut session = ResolveSession::new(context.committed.reservation_returns());
         let tokens = context.search_paths.tokens();
 
         let root = {

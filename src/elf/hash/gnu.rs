@@ -96,16 +96,7 @@ impl<L: ElfLayout> Clone for ElfGnuHash<L> {
 }
 
 impl<L: ElfLayout> ElfGnuHash<L> {
-    /// Parse a GNU hash table from raw memory
-    ///
-    /// This method creates an ElfGnuHash instance by parsing the hash table data
-    /// from a raw memory pointer.
-    ///
-    /// # Arguments
-    /// * `ptr` - Pointer to the raw hash table data in memory
-    ///
-    /// # Returns
-    /// An ElfGnuHash instance representing the parsed hash table
+    /// Parses a GNU hash table from the mapped image.
     #[inline]
     pub(crate) fn parse<R: RegionAccess>(segments: &ElfSegments<R>, addr: VmAddr) -> Result<Self> {
         const HEADER_SIZE: usize = size_of::<ElfGnuHeader>();
@@ -293,19 +284,7 @@ impl<L: ElfLayout> ElfGnuHash<L> {
         }
     }
 
-    /// Look up a symbol in the GNU hash table
-    ///
-    /// This method performs a symbol lookup using the optimized GNU hash table
-    /// structure, which includes bloom filters for fast negative lookups.
-    ///
-    /// # Arguments
-    /// * `table` - The symbol table to search in
-    /// * `symbol` - Information about the symbol to look up
-    /// * `precompute` - Precomputed hash values to speed up the lookup
-    ///
-    /// # Returns
-    /// * `Some(symbol)` - A reference to the found symbol
-    /// * `None` - If the symbol was not found
+    /// Looks up a symbol by name and, when enabled, version in the GNU table.
     pub(crate) fn lookup<'sym>(
         &self,
         table: SymbolTableView<'sym, L>,

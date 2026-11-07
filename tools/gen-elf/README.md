@@ -1,6 +1,8 @@
 # gen-elf
 
-`gen-elf` is a utility for generating ELF files (Shared Objects and Relocatable Objects) specifically designed for testing ELF loaders. It simplifies the process of creating binaries with specific symbol structures, relocation entries, and memory layouts for `elf_loader` verification.
+`gen-elf` generates shared libraries and relocatable ELF objects for loader tests.
+Configure symbols, relocations, and memory layouts, then inspect the returned
+metadata to check the loaded image.
 
 ## Features
 
@@ -45,6 +47,7 @@ Used for generating relocatable object files.
 
 ```rust
 use gen_elf::{Arch, ObjectWriter, SymbolDesc};
+use std::path::Path;
 
 let arch = Arch::X86_64;
 let writer = ObjectWriter::new(arch);
@@ -55,7 +58,7 @@ let symbols = vec![
 ];
 
 // Symbols and Relocs
-writer.write_file("test.o", &symbols, &[])?;
+writer.write_file(Path::new("test.o"), &symbols, &[])?;
 ```
 
 ### `RelocEntry`
@@ -81,4 +84,4 @@ Describe symbols with various scopes and types:
 
 This tool is particularly useful for integration testing of `elf_loader`. You can dynamically generate an ELF with specific relocation types, load it with your loader, and verify that relocations are applied correctly by inspecting `ElfWriteOutput`.
 
-See `tests/gen_elf.rs` for comprehensive examples.
+See [`tests/relocator`](../../tests/relocator) for comprehensive examples.

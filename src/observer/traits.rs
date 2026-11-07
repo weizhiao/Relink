@@ -153,222 +153,120 @@ where
 {
 }
 
-impl<D, Arch, O> LoadObserver<D, Arch> for &mut O
-where
-    D: Send + Sync + 'static,
-    Arch: RelocationArch,
-    O: LoadObserver<D, Arch> + ?Sized,
-{
-    #[inline]
-    fn on_before_load(&mut self, event: BeforeLoadEvent<'_, D, Arch::Layout>) -> Result<()> {
-        (**self).on_before_load(event)
-    }
+macro_rules! impl_observer_forwarding {
+    ($($wrapper:ty),+ $(,)?) => {
+        $(
+            impl<D, Arch, O> LoadObserver<D, Arch> for $wrapper
+            where
+                D: Send + Sync + 'static,
+                Arch: RelocationArch,
+                O: LoadObserver<D, Arch> + ?Sized,
+            {
+                #[inline]
+                fn on_before_load(&mut self, event: BeforeLoadEvent<'_, D, Arch::Layout>) -> Result<()> {
+                    (**self).on_before_load(event)
+                }
 
-    #[cfg(feature = "object")]
-    #[inline]
-    fn on_before_object_load(
-        &mut self,
-        event: BeforeObjectLoadEvent<'_, D, Arch::Layout>,
-    ) -> Result<()> {
-        (**self).on_before_object_load(event)
-    }
+                #[cfg(feature = "object")]
+                #[inline]
+                fn on_before_object_load(
+                    &mut self,
+                    event: BeforeObjectLoadEvent<'_, D, Arch::Layout>,
+                ) -> Result<()> {
+                    (**self).on_before_object_load(event)
+                }
 
-    #[cfg(feature = "object")]
-    #[inline]
-    fn on_section_layout(
-        &mut self,
-        event: &mut SectionLayoutEvent<'_, Arch::Layout>,
-    ) -> Result<()> {
-        (**self).on_section_layout(event)
-    }
+                #[cfg(feature = "object")]
+                #[inline]
+                fn on_section_layout(
+                    &mut self,
+                    event: &mut SectionLayoutEvent<'_, Arch::Layout>,
+                ) -> Result<()> {
+                    (**self).on_section_layout(event)
+                }
 
-    #[cfg(feature = "object")]
-    #[inline]
-    fn on_after_object_load<R: RegionAccess, Tls: TlsResolver<Arch>>(
-        &mut self,
-        event: AfterObjectLoadEvent<'_, D, Arch, R, Tls>,
-    ) -> Result<()>
-    where
-        Arch: ObjectArch,
-    {
-        (**self).on_after_object_load(event)
-    }
+                #[cfg(feature = "object")]
+                #[inline]
+                fn on_after_object_load<R: RegionAccess, Tls: TlsResolver<Arch>>(
+                    &mut self,
+                    event: AfterObjectLoadEvent<'_, D, Arch, R, Tls>,
+                ) -> Result<()>
+                where
+                    Arch: ObjectArch,
+                {
+                    (**self).on_after_object_load(event)
+                }
 
-    #[inline]
-    fn on_after_dynamic_load<R: RegionAccess, Tls: TlsResolver<Arch>>(
-        &mut self,
-        event: AfterDynamicLoadEvent<'_, D, Arch, R, Tls>,
-    ) -> Result<()> {
-        (**self).on_after_dynamic_load(event)
-    }
+                #[inline]
+                fn on_after_dynamic_load<R: RegionAccess, Tls: TlsResolver<Arch>>(
+                    &mut self,
+                    event: AfterDynamicLoadEvent<'_, D, Arch, R, Tls>,
+                ) -> Result<()> {
+                    (**self).on_after_dynamic_load(event)
+                }
+            }
+
+            impl<Arch, O> RelocationObserver<Arch> for $wrapper
+            where
+                Arch: RelocationArch,
+                O: RelocationObserver<Arch> + ?Sized,
+            {
+                #[inline]
+                fn on_relocation_pre<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
+                    &mut self,
+                    ctx: &mut RelocationEvent<'_, D, Arch, R, Tls>,
+                ) -> Result<HandleResult> {
+                    (**self).on_relocation_pre(ctx)
+                }
+
+                #[inline]
+                fn on_relocation_post<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
+                    &mut self,
+                    ctx: &mut RelocationEvent<'_, D, Arch, R, Tls>,
+                ) -> Result<HandleResult> {
+                    (**self).on_relocation_post(ctx)
+                }
+
+                #[inline]
+                fn on_symbol_binding<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
+                    &mut self,
+                    event: &mut SymbolBindingEvent<'_, D, Arch, R, Tls>,
+                ) -> Result<()> {
+                    (**self).on_symbol_binding(event)
+                }
+
+                #[cfg(feature = "object")]
+                #[inline]
+                fn on_object_relocated<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
+                    &mut self,
+                    event: &mut ObjectRelocatedEvent<'_, D, Arch, R, Tls>,
+                ) -> Result<()> {
+                    (**self).on_object_relocated(event)
+                }
+
+                #[inline]
+                fn on_dynamic_relocated<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
+                    &mut self,
+                    event: &mut DynamicRelocatedEvent<'_, D, Arch, R, Tls>,
+                ) -> Result<()> {
+                    (**self).on_dynamic_relocated(event)
+                }
+            }
+
+            impl<D: Send + Sync + 'static, Arch, R, Tls, O> LinkerObserver<D, Arch, R, Tls> for $wrapper
+            where
+                Arch: RelocationArch,
+                R: RegionAccess,
+                Tls: TlsResolver<Arch>,
+                O: LinkerObserver<D, Arch, R, Tls> + ?Sized,
+            {
+                #[inline]
+                fn on_relocation(&mut self, event: &mut LinkerRelocationEvent<D, Arch, R, Tls>) -> Result<()> {
+                    (**self).on_relocation(event)
+                }
+            }
+        )+
+    };
 }
 
-impl<Arch, O> RelocationObserver<Arch> for &mut O
-where
-    Arch: RelocationArch,
-    O: RelocationObserver<Arch> + ?Sized,
-{
-    #[inline]
-    fn on_relocation_pre<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
-        &mut self,
-        ctx: &mut RelocationEvent<'_, D, Arch, R, Tls>,
-    ) -> Result<HandleResult> {
-        (**self).on_relocation_pre(ctx)
-    }
-
-    #[inline]
-    fn on_relocation_post<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
-        &mut self,
-        ctx: &mut RelocationEvent<'_, D, Arch, R, Tls>,
-    ) -> Result<HandleResult> {
-        (**self).on_relocation_post(ctx)
-    }
-
-    #[inline]
-    fn on_symbol_binding<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
-        &mut self,
-        event: &mut SymbolBindingEvent<'_, D, Arch, R, Tls>,
-    ) -> Result<()> {
-        (**self).on_symbol_binding(event)
-    }
-
-    #[cfg(feature = "object")]
-    #[inline]
-    fn on_object_relocated<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
-        &mut self,
-        event: &mut ObjectRelocatedEvent<'_, D, Arch, R, Tls>,
-    ) -> Result<()> {
-        (**self).on_object_relocated(event)
-    }
-
-    #[inline]
-    fn on_dynamic_relocated<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
-        &mut self,
-        event: &mut DynamicRelocatedEvent<'_, D, Arch, R, Tls>,
-    ) -> Result<()> {
-        (**self).on_dynamic_relocated(event)
-    }
-}
-
-impl<D: Send + Sync + 'static, Arch, R, Tls, O> LinkerObserver<D, Arch, R, Tls> for &mut O
-where
-    Arch: RelocationArch,
-    R: RegionAccess,
-    Tls: TlsResolver<Arch>,
-    O: LinkerObserver<D, Arch, R, Tls> + ?Sized,
-{
-    #[inline]
-    fn on_relocation(&mut self, event: &mut LinkerRelocationEvent<D, Arch, R, Tls>) -> Result<()> {
-        (**self).on_relocation(event)
-    }
-}
-
-impl<D, Arch, O> LoadObserver<D, Arch> for Box<O>
-where
-    D: Send + Sync + 'static,
-    Arch: RelocationArch,
-    O: LoadObserver<D, Arch> + ?Sized,
-{
-    #[inline]
-    fn on_before_load(&mut self, event: BeforeLoadEvent<'_, D, Arch::Layout>) -> Result<()> {
-        (**self).on_before_load(event)
-    }
-
-    #[cfg(feature = "object")]
-    #[inline]
-    fn on_before_object_load(
-        &mut self,
-        event: BeforeObjectLoadEvent<'_, D, Arch::Layout>,
-    ) -> Result<()> {
-        (**self).on_before_object_load(event)
-    }
-
-    #[cfg(feature = "object")]
-    #[inline]
-    fn on_section_layout(
-        &mut self,
-        event: &mut SectionLayoutEvent<'_, Arch::Layout>,
-    ) -> Result<()> {
-        (**self).on_section_layout(event)
-    }
-
-    #[cfg(feature = "object")]
-    #[inline]
-    fn on_after_object_load<R: RegionAccess, Tls: TlsResolver<Arch>>(
-        &mut self,
-        event: AfterObjectLoadEvent<'_, D, Arch, R, Tls>,
-    ) -> Result<()>
-    where
-        Arch: ObjectArch,
-    {
-        (**self).on_after_object_load(event)
-    }
-
-    #[inline]
-    fn on_after_dynamic_load<R: RegionAccess, Tls: TlsResolver<Arch>>(
-        &mut self,
-        event: AfterDynamicLoadEvent<'_, D, Arch, R, Tls>,
-    ) -> Result<()> {
-        (**self).on_after_dynamic_load(event)
-    }
-}
-
-impl<Arch, O> RelocationObserver<Arch> for Box<O>
-where
-    Arch: RelocationArch,
-    O: RelocationObserver<Arch> + ?Sized,
-{
-    #[inline]
-    fn on_relocation_pre<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
-        &mut self,
-        ctx: &mut RelocationEvent<'_, D, Arch, R, Tls>,
-    ) -> Result<HandleResult> {
-        (**self).on_relocation_pre(ctx)
-    }
-
-    #[inline]
-    fn on_relocation_post<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
-        &mut self,
-        ctx: &mut RelocationEvent<'_, D, Arch, R, Tls>,
-    ) -> Result<HandleResult> {
-        (**self).on_relocation_post(ctx)
-    }
-
-    #[inline]
-    fn on_symbol_binding<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
-        &mut self,
-        event: &mut SymbolBindingEvent<'_, D, Arch, R, Tls>,
-    ) -> Result<()> {
-        (**self).on_symbol_binding(event)
-    }
-
-    #[cfg(feature = "object")]
-    #[inline]
-    fn on_object_relocated<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
-        &mut self,
-        event: &mut ObjectRelocatedEvent<'_, D, Arch, R, Tls>,
-    ) -> Result<()> {
-        (**self).on_object_relocated(event)
-    }
-
-    #[inline]
-    fn on_dynamic_relocated<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
-        &mut self,
-        event: &mut DynamicRelocatedEvent<'_, D, Arch, R, Tls>,
-    ) -> Result<()> {
-        (**self).on_dynamic_relocated(event)
-    }
-}
-
-impl<D: Send + Sync + 'static, Arch, R, Tls, O> LinkerObserver<D, Arch, R, Tls> for Box<O>
-where
-    Arch: RelocationArch,
-    R: RegionAccess,
-    Tls: TlsResolver<Arch>,
-    O: LinkerObserver<D, Arch, R, Tls> + ?Sized,
-{
-    #[inline]
-    fn on_relocation(&mut self, event: &mut LinkerRelocationEvent<D, Arch, R, Tls>) -> Result<()> {
-        (**self).on_relocation(event)
-    }
-}
+impl_observer_forwarding!(&mut O, Box<O>);

@@ -1,8 +1,8 @@
 # Relink: Rust ELF Loader and Runtime Linker
 
 <p align="center">
-  <img src="docs/assets/logo-dark.svg#gh-dark-mode-only" width="500" alt="Relink">
-  <img src="docs/assets/logo.svg#gh-light-mode-only" width="500" alt="Relink">
+  <img src="https://raw.githubusercontent.com/weizhiao/Relink/main/docs/assets/logo-dark.svg#gh-dark-mode-only" width="500" alt="Relink">
+  <img src="https://raw.githubusercontent.com/weizhiao/Relink/main/docs/assets/logo.svg#gh-light-mode-only" width="500" alt="Relink">
 </p>
 
 <p align="center">
@@ -166,12 +166,10 @@ elf_loader = { version = "0.18.0", default-features = false, features = ["std"] 
 TLS is configured through a resolver, without a feature flag. Host libraries require
 explicit imports; see the [example](examples/host_import.rs).
 
-With `std`, the default resolver uses a heap-allocated DTV owned by a pthread key
-on Linux/Android; Rust thread-local storage only caches its pointer. The DTV is
-reclaimed in the second pthread destructor round, keeping TLS blocks available
-during first-round cleanup. Arbitrarily rearmed foreign destructors may run later.
-All default-resolver registrations require this backend, including static TLS and
-custom providers. Other targets and `no_std` builds require a custom resolver.
+The default TLS resolver requires `std` on Linux/Android, including for static TLS
+and custom providers. Other targets and `no_std` builds need a custom resolver.
+See the [TLS API](https://docs.rs/elf_loader/latest/elf_loader/tls/index.html) for
+thread cleanup and pointer-lifetime requirements.
 For `use-syscall`, disable default features and do not enable `std`.
 
 ## Contributing

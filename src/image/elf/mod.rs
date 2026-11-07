@@ -8,7 +8,7 @@ use crate::{
     Result,
     arch::NativeArch,
     elf::ElfPhdr,
-    image::{LoadedCore, Module},
+    image::LoadedCore,
     input::Path,
     lazy::{LazyBinder, SupportLazy},
     memory::{HostRegion, RegionAccess, VmAddr},
@@ -108,12 +108,7 @@ impl<D: Send + Sync + 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolv
     /// Gets the ELF image identity used for diagnostics.
     #[inline]
     pub fn name(&self) -> &[u8] {
-        match self {
-            RawElf::Dylib(dylib) => dylib.name(),
-            RawElf::Exec(exec) => exec.name(),
-            #[cfg(feature = "object")]
-            RawElf::Object(object) => object.name(),
-        }
+        self.path().file_name()
     }
 
     /// Returns the entry point of the ELF file.
@@ -164,11 +159,7 @@ impl<D: Send + Sync + 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolv
 impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     LoadedElf<D, Arch, R, Tls>
 {
-    /// Converts this LoadedElf into the loaded core for a dylib if it is one.
-    ///
-    /// # Returns
-    /// * `Some(dylib)` - If this is a Dylib variant
-    /// * `None` - If this is an Exec variant
+    /// Consumes a dynamic library, returning `None` for other variants.
     #[inline]
     pub fn into_dylib(self) -> Option<LoadedCore<D, Arch, R, Tls>> {
         match self {
@@ -177,11 +168,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         }
     }
 
-    /// Converts this LoadedElf into a LoadedExec if it is one
-    ///
-    /// # Returns
-    /// * `Some(exec)` - If this is an Exec variant
-    /// * `None` - If this is a Dylib variant
+    /// Consumes an executable, returning `None` for other variants.
     #[inline]
     pub fn into_exec(self) -> Option<LoadedExec<D, Arch, R, Tls>> {
         match self {
@@ -190,11 +177,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         }
     }
 
-    /// Converts this LoadedElf into a LoadedObject if it is one
-    ///
-    /// # Returns
-    /// * `Some(object)` - If this is an Object variant
-    /// * `None` - If this is a Dylib or Exec variant
+    /// Consumes an object file, returning `None` for other variants.
     #[cfg(feature = "object")]
     #[inline]
     pub fn into_object(self) -> Option<LoadedObject<D, Arch, R, Tls>> {
@@ -204,11 +187,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         }
     }
 
-    /// Gets a reference to the loaded core for a dylib if this is one.
-    ///
-    /// # Returns
-    /// * `Some(dylib)` - If this is a Dylib variant
-    /// * `None` - If this is an Exec variant
+    /// Borrows a dynamic library, returning `None` for other variants.
     #[inline]
     pub fn as_dylib(&self) -> Option<&LoadedCore<D, Arch, R, Tls>> {
         match self {
@@ -217,11 +196,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         }
     }
 
-    /// Gets a reference to the LoadedExec if this is one
-    ///
-    /// # Returns
-    /// * `Some(exec)` - If this is an Exec variant
-    /// * `None` - If this is a Dylib variant
+    /// Borrows an executable, returning `None` for other variants.
     #[inline]
     pub fn as_exec(&self) -> Option<&LoadedExec<D, Arch, R, Tls>> {
         match self {
@@ -230,11 +205,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         }
     }
 
-    /// Gets a reference to the LoadedObject if this is one
-    ///
-    /// # Returns
-    /// * `Some(object)` - If this is an Object variant
-    /// * `None` - If this is a Dylib or Exec variant
+    /// Borrows an object file, returning `None` for other variants.
     #[cfg(feature = "object")]
     #[inline]
     pub fn as_object(&self) -> Option<&LoadedObject<D, Arch, R, Tls>> {
@@ -258,12 +229,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     /// Gets the ELF image identity used for diagnostics.
     #[inline]
     pub fn name(&self) -> &[u8] {
-        match self {
-            LoadedElf::Dylib(dylib) => dylib.name(),
-            LoadedElf::Exec(exec) => exec.name(),
-            #[cfg(feature = "object")]
-            LoadedElf::Object(object) => object.name(),
-        }
+        self.path().file_name()
     }
 
     /// Returns whether `addr` is inside this image's mapped memory.

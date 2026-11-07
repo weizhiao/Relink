@@ -280,7 +280,7 @@ pub(crate) struct CommittedStorage<Meta = (), Arch: RelocationArch = NativeArch>
     entries: PrimaryMap<ModuleSlot, ModuleCell<Meta, Arch>>,
     lifecycle: Vec<ModuleSlot>,
     free_slots: Vec<ModuleSlot>,
-    reservation_returns: Option<ReservationReturns>,
+    reservation_returns: ReservationReturns,
     pub(super) addresses: Arc<AddressIndex>,
 }
 
@@ -298,7 +298,7 @@ where
             entries: PrimaryMap::default(),
             lifecycle: Vec::new(),
             free_slots: Vec::new(),
-            reservation_returns: None,
+            reservation_returns: Arc::new(Mutex::new(Vec::new())),
             addresses: Arc::new(AddressIndex::default()),
         }
     }
@@ -475,31 +475,21 @@ where
         result
     }
 
-    // Called once when a transaction first reserves a module, so subsequent
-    // allocations in the same group do not acquire the return queue lock.
-    pub(crate) fn reserve_returns(&mut self) -> ReservationReturns {
-        self.reclaim_returned_slots();
-        Arc::clone(
-            self.reservation_returns
-                .get_or_insert_with(|| Arc::new(Mutex::new(Vec::new()))),
-        )
+    pub(crate) fn reservation_returns(&self) -> ReservationReturns {
+        Arc::clone(&self.reservation_returns)
     }
 
     pub(crate) fn reclaim_returned_slots(&mut self) {
-        let Some(returns) = &self.reservation_returns else {
-            return;
-        };
-        let mut returned = returns.lock();
+        let mut returned = self.reservation_returns.lock();
         for (slot, generation) in returned.drain(..) {
-            let Some(cell) = self.entries.get_mut(slot) else {
-                continue;
-            };
-            if cell.generation == generation && cell.entry.is_none() {
-                // A returned reservation must not invalidate a later occupant
-                // or put the same vacant slot on the free list twice.
-                cell.advance_generation();
-                self.free_slots.push(slot);
-            }
+            let cell = &mut self.entries[slot];
+            assert_eq!(
+                cell.generation, generation,
+                "returned reservation must match the slot generation"
+            );
+            assert!(cell.entry.is_none(), "returned reservation must be vacant");
+            cell.advance_generation();
+            self.free_slots.push(slot);
         }
     }
 
@@ -597,15 +587,6 @@ impl<Meta, Arch: RelocationArch> Publication<'_, Meta, Arch> {
     #[inline]
     pub(crate) fn bind_key(&mut self, key: ModuleKey, slot: ModuleSlot) {
         self.storage.bind_key(key, slot);
-    }
-
-    #[inline]
-    pub(crate) fn acquire_root(&mut self, slot: ModuleSlot) -> ModuleId {
-        self.storage
-            .module_mut(slot)
-            .expect("reused module must remain committed")
-            .acquire_root();
-        self.storage.make_module_id(slot)
     }
 
     #[inline]

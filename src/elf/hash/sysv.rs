@@ -54,16 +54,7 @@ pub(crate) struct ElfHash {
 }
 
 impl ElfHash {
-    /// Parse a SYSV hash table from raw memory
-    ///
-    /// This method creates an ElfHash instance by parsing the hash table data
-    /// from a raw memory pointer.
-    ///
-    /// # Arguments
-    /// * `ptr` - Pointer to the raw hash table data in memory
-    ///
-    /// # Returns
-    /// An ElfHash instance representing the parsed hash table
+    /// Parses a SYSV hash table from the mapped image.
     #[inline]
     pub(crate) fn parse<R: RegionAccess>(
         segments: &ElfSegments<R>,
@@ -134,19 +125,7 @@ impl ElfHash {
         }
     }
 
-    /// Look up a symbol in the SYSV hash table
-    ///
-    /// This method performs a symbol lookup using the bucket/chain structure
-    /// of the SYSV hash table.
-    ///
-    /// # Arguments
-    /// * `table` - The symbol table to search in
-    /// * `symbol` - Information about the symbol to look up
-    /// * `precompute` - Precomputed hash values to speed up the lookup
-    ///
-    /// # Returns
-    /// * `Some(symbol)` - A reference to the found symbol
-    /// * `None` - If the symbol was not found
+    /// Looks up a symbol by name and, when enabled, version in the SYSV table.
     pub(crate) fn lookup<'sym, L: ElfLayout>(
         &self,
         table: SymbolTableView<'sym, L>,

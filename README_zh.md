@@ -1,8 +1,8 @@
 # Relink：Rust ELF 加载器与运行时链接器
 
 <p align="center">
-  <img src="docs/assets/logo-dark.svg#gh-dark-mode-only" width="500" alt="Relink">
-  <img src="docs/assets/logo.svg#gh-light-mode-only" width="500" alt="Relink">
+  <img src="https://raw.githubusercontent.com/weizhiao/Relink/main/docs/assets/logo-dark.svg#gh-dark-mode-only" width="500" alt="Relink">
+  <img src="https://raw.githubusercontent.com/weizhiao/Relink/main/docs/assets/logo.svg#gh-light-mode-only" width="500" alt="Relink">
 </p>
 
 <p align="center">
@@ -159,6 +159,7 @@ elf_loader = { version = "0.18.0", default-features = false, features = ["std"] 
 TLS 通过 resolver 配置，无需 feature 开关；宿主库需要显式导入，见[示例](examples/host_import.rs)。
 
 默认 resolver 的所有注册（包括静态 TLS 和自定义 provider）都要求启用 `std` 的 Linux/Android 线程存储后端；其他平台及 `no_std` 环境需提供自定义 resolver。
+线程清理和指针生命周期要求见 [TLS API](https://docs.rs/elf_loader/latest/elf_loader/tls/index.html)。
 使用 `use-syscall` 时，需禁用默认 feature，且不能启用 `std`。
 
 ## 参与贡献

@@ -2,7 +2,7 @@ use crate::{
     input::{ModulePath, Path, PathBuf, PathStr, PathString},
     sync::{Arc, AtomicU8, OnceCell, Ordering},
 };
-use alloc::{borrow::ToOwned, boxed::Box, collections::BTreeSet, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeSet, vec::Vec};
 use core::{borrow::Borrow, cmp::Ordering as CmpOrdering, fmt, ops::Deref};
 
 #[repr(u8)]
@@ -241,7 +241,14 @@ impl SearchPathPool {
         dir
     }
 
-    pub(crate) fn module_search(
+    /// Constructs search metadata from a module path and raw dynamic strings.
+    ///
+    /// `None` means the corresponding dynamic tag is absent; `Some(b"")`
+    /// preserves an explicitly empty tag, including RUNPATH's RPATH suppression.
+    /// `$ORIGIN` uses the path's parent directory. `$LIB` and `$PLATFORM` use
+    /// this pool's configured values; paths requiring unavailable values are skipped.
+    /// Expanded directories and their existence caches are shared within the pool.
+    pub fn module_search(
         &mut self,
         path: ModulePath,
         soname: Option<&[u8]>,
@@ -396,7 +403,7 @@ impl fmt::Debug for ModuleSearch {
 }
 
 fn token_len(value: &[u8], name: &str) -> Option<usize> {
-    if value.get(0) == Some(&b'{')
+    if value.first() == Some(&b'{')
         && value.get(1..(1 + name.len())) == Some(name.as_bytes())
         && value.get(1 + name.len()) == Some(&b'}')
     {
@@ -415,8 +422,8 @@ fn token_len(value: &[u8], name: &str) -> Option<usize> {
     .then_some(name.len())
 }
 
-pub(crate) fn normalize_dir<P: AsRef<Path>>(path: P) -> PathBuf {
-    let bytes = path.as_ref().as_bytes();
+pub(crate) fn normalize_dir(mut path: PathBuf) -> PathBuf {
+    let bytes = path.as_bytes();
     let is_separator = |byte| byte == b'/' || byte == b'\\';
     let min_len = if bytes.len() >= 2 && is_separator(bytes[0]) && is_separator(bytes[1]) {
         2
@@ -427,21 +434,32 @@ pub(crate) fn normalize_dir<P: AsRef<Path>>(path: P) -> PathBuf {
     } else {
         0
     };
-    let mut len = bytes.len();
-    while len > min_len && is_separator(bytes[len - 1]) {
-        len -= 1;
-    }
-    if len == bytes.len() {
-        path.as_ref().to_owned()
-    } else {
-        // SAFETY: `bytes` up to `len` is a valid UTF-8 superset, since we split it at an ASCII separator.
-        PathBuf::from(unsafe { PathStr::new(&bytes[..len]) })
-    }
+    path.trim_trailing_separators(min_len);
+    path
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn directory_normalization_preserves_roots() {
+        for (input, expected) in [
+            ("", ""),
+            ("/", "/"),
+            ("///", "//"),
+            (r"C:\", r"C:\"),
+            (r"C:\\", r"C:\"),
+            (r"\\server\share\\", r"\\server\share"),
+            ("/opt/plugins///", "/opt/plugins"),
+            ("plugins", "plugins"),
+            ("插件/", "插件"),
+        ] {
+            let path = PathBuf::from(input);
+            let normalized = normalize_dir(path);
+            assert_eq!(normalized.as_bytes(), expected.as_bytes());
+        }
+    }
 
     #[test]
     fn dirs_are_shared() {

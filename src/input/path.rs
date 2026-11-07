@@ -215,7 +215,7 @@ impl Path {
     #[cfg(not(windows))]
     #[inline]
     pub(crate) fn is_absolute(&self) -> bool {
-        self.as_bytes().get(0) == Some(&b'/')
+        self.as_bytes().first() == Some(&b'/')
     }
 
     #[cfg(windows)]
@@ -233,9 +233,7 @@ impl Path {
     pub fn parent(&self) -> &Self {
         let path = self.as_bytes();
 
-        let slash = path.iter().rposition(|&x| x == b'/');
-        let backslash = path.iter().rposition(|&x| x == b'\\');
-        let Some(index) = slash.into_iter().chain(backslash).max() else {
+        let Some(index) = path.iter().rposition(|byte| matches!(byte, b'/' | b'\\')) else {
             return Self::new(".");
         };
 
@@ -253,9 +251,7 @@ impl Path {
     /// Returns the last path component.
     pub fn file_name(&self) -> &[u8] {
         let path = self.as_bytes();
-        let slash = path.iter().rposition(|&x| x == b'/');
-        let backslash = path.iter().rposition(|&x| x == b'\\');
-        let Some(index) = slash.into_iter().chain(backslash).max() else {
+        let Some(index) = path.iter().rposition(|byte| matches!(byte, b'/' | b'\\')) else {
             return path;
         };
         &path[index + 1..]
@@ -373,6 +369,18 @@ impl PathBuf {
     /// Extends `self` with `path`.
     pub fn push<P: AsRef<Path>>(&mut self, path: P) {
         self.0.push(path.as_ref());
+    }
+
+    pub(crate) fn trim_trailing_separators(&mut self, min_len: usize) {
+        while self.0.0.len() > min_len
+            && self
+                .0
+                .0
+                .last()
+                .is_some_and(|byte| matches!(byte, b'/' | b'\\'))
+        {
+            self.0.0.pop();
+        }
     }
 
     pub(crate) fn set_joined(&mut self, dir: &Path, name: &Path) {

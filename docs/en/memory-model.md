@@ -1,177 +1,78 @@
 # Relink Memory Model
 
-`src/os/memory` is the abstraction layer for accessing memory after it has already been mapped.
-
-It does not decide where ELF segments should be placed, and it does not directly implement Linux `mmap` or Windows `VirtualAlloc`. Those jobs belong to the `Mmap` backend in `src/os/traits.rs` and the platform-specific implementations. `src/os/memory` is the common access layer after mapping: given a memory region, the loader, relocator, and table parsers should all read, write, borrow, and protect it through the same model.
-
-You can think of it as three layers:
+The [`memory` module](../../src/memory/mod.rs) provides access to mapped memory.
+The [`Mmap` trait](../../src/os/traits.rs) creates and populates mappings;
+`RegionAccess` reads, writes, borrows, and protects their contents.
 
 ```text
-platform mmap backend
-    creates/populates virtual address space
-        |
-        v
-MappedRegion
-    stores a mapped region and manages its lifetime
-        |
-        v
-RegionAccess
-    reads, writes, zeroes, borrows, and protects that region
+Mmap                  creates and populates a mapping
+  → MappedRegion      shares ownership of a RegionAccess backend
+    → ElfSegments     translates image addresses and checks mapped ranges
+      → ImageMemory   exposes address-based access to the rest of the loader
 ```
 
-## Why This Layer Exists
+This model covers file mappings, copied byte buffers, pre-mapped executables,
+and custom address spaces.
 
-An ELF loader looks like a file-format parser, but the hard part is often answering: where are these bytes now?
+## Addresses and Offsets
 
-The same ELF data may come from several places:
+`VmAddr` is an address in the target address space. `VmOffset` is an image-relative
+virtual offset, such as a program header's `p_vaddr`. Neither is a file offset.
+Both wrap `usize`; `.get()` returns the numeric value.
 
-- File mapping: file pages are mapped directly into the process address space.
-- Memory input: the user passes `&[u8]`, and the loader copies bytes into its own mapped space.
-- Existing mappings: during dynamic-linker startup, the kernel may have already mapped the main executable.
-- Custom runtimes: kernels, embedded systems, or guest VMs may not have normal host mmap.
+```rust
+use elf_loader::memory::{VmAddr, VmOffset};
 
-If every module handled raw pointers and `usize` arithmetic directly, the code would become fragile quickly. `src/os/memory` keeps those differences in one place, so upper layers only need to ask:
-
-- What runtime address does this region start at?
-- Can I read bytes from this offset?
-- Can I get a host pointer for fast copying?
-- Who releases this memory in the end?
-
-## Core Types
-
-### `VmAddr` And `VmOffset`
-
-`VmAddr` represents a runtime virtual address. `VmOffset` represents an offset inside an ELF image's virtual address space.
-
-Both are lightweight wrappers around `usize`, but they mean different things:
-
-```text
-VmAddr   = address in the process/runtime, such as 0x7f00_1234_0000
-VmOffset = image-relative offset, such as p_vaddr, section offset, or symbol value
-```
-
-The common relationship is:
-
-```text
-runtime address = load base + vm offset
-```
-
-In code, that becomes:
-
-```rust,ignore
+let base = VmAddr::new(0x400000);
+let offset = VmOffset::new(0x1000);
 let addr = base + offset;
+assert_eq!(addr.get(), 0x401000);
 ```
 
-This is harder to mix up than passing raw `usize` everywhere. When plain numeric values are needed, callers use `.get()` explicitly.
+The load base is a relocation bias: `runtime address = load base + virtual offset`.
+It may differ from the start of the backing region. A target address is only
+usable as a host pointer when the backend exposes host-accessible memory.
 
-### `RegionAccess`
+## Regions and Ownership
 
-`RegionAccess` is the actual memory access interface. It describes what can be done with one mapped region.
+`RegionAccess` describes one contiguous memory region. It provides byte and typed
+reads/writes, zeroing, optional host access, and protection/advice operations.
+Unchecked methods require the caller to validate the range. Borrowing also requires
+keeping the mapping alive and preventing mutation while the slice is in use.
+Backend errors do not replace these safety requirements.
 
-The main methods are:
+`MappedRegion<R>` shares a backend through `Arc<R>`. Cloning retains the same region;
+the backend is dropped when its last handle is dropped. Its internal access helpers
+use region-relative offsets, not ELF virtual offsets.
 
-- `addr()`: base virtual address of the region.
-- `len()`: region length.
-- `read_bytes()` / `write_bytes()`: byte reads and writes.
-- `read_value()` / `write_value()`: typed value reads and writes.
-- `zero_bytes()`: zero a byte range.
-- `borrow_bytes()`: borrow directly readable host bytes.
-- `host_ptr()`: get a host pointer for fast copying.
-- `madvise()` / `mprotect()`: forward advice/protection changes to the mmap backend.
+`HostRegion` implements access to memory in the current process:
 
-Most access methods are `unsafe`. Not because the interface randomly goes out of bounds, but because callers are expected to have already checked the range. That keeps hot paths from repeating the same bounds checks at every layer.
+- `MappedRegion::local` owns a mapping and releases the original allocation through
+  the backend's `munmap` when the last handle is dropped.
+- `MappedRegion::local_alias` borrows a mapping. Its owner must keep the mapping
+  alive and coordinate access and protection changes with all aliases.
+- `MappedRegion::local_alias_no_unmap` borrows memory without a mapping-control backend.
 
-In other words:
+`AllocMmap` retains the original allocation pointer and Rust `Layout`, then calls
+`dealloc` on drop. Its raw `munmap(addr, len)` returns an error because the address
+and length do not identify the allocation layout.
 
-```text
-ElfSegments checks whether an address is inside the mapped ranges.
-RegionAccess performs the offset-based read or write.
-```
+`MappedView<T>` is an internal typed view of borrowed bytes. Its stored `'static`
+slice does not own the mapping: the enclosing image must retain the memory and
+respect the borrow. Creating a view requires suitable length and alignment.
+Backends that cannot expose host bytes return `None` from `borrow_bytes`; callers
+must handle that case rather than assume every parsing path can borrow memory.
 
-### `MappedRegion`
+## Image Address Translation
 
-`MappedRegion<R>` is a shared handle to a mapped region.
+`ElfSegments` retains a load base, a backing `MappedRegion`, and image-relative
+`MappedRange` entries. The ranges can be sparse even though the backing region is
+contiguous. Access first checks that the requested address range belongs to the
+image, then converts it to an offset in the backing region.
 
-Internally it stores an `Arc<R>` where `R` implements `RegionAccess`, so cloning a `MappedRegion` is cheap. Upper layers can keep a `MappedRegion` without caring whether the backend is host mmap, borrowed external memory, or a future guest-memory adapter.
-
-It provides thin wrappers such as:
-
-```rust,ignore
-region.read_bytes(offset, dst)
-region.write_value(offset, value)
-region.borrow_bytes(offset, len)
-region.mprotect(offset, len, prot)
-```
-
-`MappedRegion` does not do complex ELF address translation. It only understands offsets inside its backing region. Higher layers such as `ElfSegments` translate ELF runtime addresses into region offsets.
-
-### `HostRegion`
-
-`HostRegion` is the common `RegionAccess` implementation for memory that the host process can access directly.
-
-It retains the host pointer, visible length, and the information needed to control and release the memory. Ownership determines how the memory is released:
-
-- `MappedRegion::local(...)`: this region owns a mapping managed by the backend and calls its `munmap` when the last clone is dropped.
-- `MappedRegion::local_alias(...)`: this region is only a borrowed alias and does not release memory on drop.
-
-`AllocMmap` allocates using `SpaceLayout.align` with the minimum prefix `offset % align`. The returned region retains the original pointer and Rust `Layout` for direct `dealloc` when the last owner is dropped. Its raw `Mmap::munmap(addr, len)` returns an error because the address and length alone do not identify the original allocation layout.
-
-### `MappedView`
-
-`MappedView<T>` is a typed borrowed view. Internally, it is just a `&'static [T]`.
-
-It is used for parsing ELF tables such as the dynamic table, program headers, and symbol tables. The usual flow is:
-
-```text
-MappedRegion::borrow_bytes(...)
-        |
-        v
-check length and alignment
-        |
-        v
-MappedView<T>
-```
-
-The parser then receives `&[T]` instead of manually handling raw pointers everywhere. This only works when the backend can expose directly readable host bytes. If it cannot, `borrow_bytes()` can return `None`, and upper layers can choose a copy/parse path instead.
-
-## Relationship With `ElfSegments`
-
-`src/os/memory` describes how to access one region. An ELF image also needs to know which runtime address ranges that region covers.
-
-That is the job of `ElfSegments`.
-
-In short:
-
-```text
-MappedRegion:
-    I have one contiguous backing memory region.
-
-ElfSegments:
-    This backing memory covers these ranges in the ELF runtime address space.
-```
-
-`ElfSegments` stores:
-
-- `base: VmAddr`: the load base.
-- `region: MappedRegion`: the backing memory.
-- `ranges`: the runtime ranges actually mapped by this image.
-
-When an upper layer reads a runtime address, the flow is:
-
-```text
-runtime address
-    |
-    v
-ElfSegments checks whether it is inside mapped ranges
-    |
-    v
-convert it into a region offset
-    |
-    v
-MappedRegion / RegionAccess performs the access
-```
-
-This lets the loader support sparse ELF runtime ranges while still using one shared backing region underneath.
+`ImageMemory` exposes this address-based view through range queries, byte access,
+and optional host pointers. `ImageMemoryExt` adds typed access helpers while
+keeping `ImageMemory` usable as a trait object.
 
 ## How `Mmap` And The Memory Layer Work Together
 
@@ -204,7 +105,7 @@ All file-backed segments share BSS handling: zeroing covers the rest of the part
 
 ## Unsafe Boundaries
 
-This layer contains a fair amount of `unsafe`, but the risks are separated:
+The unsafe operations have separate responsibilities:
 
 - `Mmap` backend `unsafe`: changes the process virtual address space. Incorrect calls can break mappings.
 - `RegionAccess` `unsafe`: assumes the caller has already proven that offset and length are inside the region.
@@ -241,16 +142,3 @@ When implementing `RegionAccess`, expose only what is actually available:
 - If host bytes can be borrowed directly, implement `borrow_bytes`.
 - If a host pointer can be returned, implement `host_ptr`.
 - If direct exposure is impossible, return `None` and let upper layers choose another path.
-
-## Summary
-
-The core idea of `src/os/memory` is to separate where memory is from how it is accessed:
-
-- `Mmap`: creates and populates virtual address space.
-- `MappedRegion`: stores a shared handle to a mapped region.
-- `RegionAccess`: reads, writes, zeroes, borrows, and protects that region.
-- `HostRegion`: implements the common host mmap case.
-- `VmAddr` / `VmOffset`: keep address and offset semantics distinct.
-- `ElfSegments`: maps ELF runtime addresses to `MappedRegion` offsets.
-
-With this split, the loader can handle file mappings, memory inputs, pre-mapped images, and custom runtimes through one access model instead of spreading platform details through ELF parsing and relocation code.

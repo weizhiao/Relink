@@ -3,7 +3,7 @@ use elf_loader::{
     AddressSpaceId, Domain, LinkContext, Loader, host,
     image::ModuleHandle,
     input::{ElfFile, Path as ElfPath},
-    linker::{GraphModule, LdCache, SearchConfig, SearchPathResolver},
+    linker::{GraphModule, LdCache, SearchPathResolver},
     tls::DefaultTlsResolver,
 };
 use std::{
@@ -56,23 +56,27 @@ impl LibraryCache {
     /// Finds the first installed candidate accepted by the native loader backend.
     pub fn find(&self, name: &str) -> Option<PathBuf> {
         let loader = Loader::new();
+        let run = loader.run(Domain::native(AddressSpaceId::PROCESS));
         self.cache.candidates(name).find_map(|path| {
             let file = ElfFile::from_path(path).ok()?;
-            loader.read_ehdr(&file).ok()?;
+            run.read_ehdr(&file).ok()?;
             Some(PathBuf::from(OsStr::from_bytes(path.as_bytes())))
         })
     }
 
     pub fn resolver(&self) -> SearchPathResolver {
-        let mut config = SearchConfig::new().cache(self.cache.clone());
+        let mut resolver = SearchPathResolver::new();
+        resolver.push_rpath();
         if let Some(paths) = std::env::var_os("LD_LIBRARY_PATH") {
             let executable = std::env::current_exe().expect("cannot locate benchmark executable");
-            config = config.library_path(
+            resolver.push_library_path(
                 ElfPath::new(paths.as_bytes()),
                 ElfPath::new(executable.parent().unwrap().as_os_str().as_bytes()),
             );
         }
-        SearchPathResolver::with_config(config)
+        resolver.push_runpath();
+        resolver.push_ld_cache(self.cache.clone());
+        resolver
     }
 }
 

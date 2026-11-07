@@ -269,6 +269,7 @@ mod tests {
         let bytes = output.data;
         let loader = Loader::new();
         let ScannedElf::Dynamic(scanned) = loader
+            .run(Domain::native(AddressSpaceId::PROCESS))
             .scan(ElfBinary::owned("arena-backed.so", bytes))
             .unwrap()
         else {

@@ -171,7 +171,7 @@ lazy-binding = []
 object = ["hashbrown/default-hasher"]
 # Enable logging.
 log = ["dep:log"]
-# support target without native pointer size atomic operation
+# Support targets without native pointer-sized atomic operations.
 portable-atomic = [
 	"dep:portable-atomic",
 	"dep:portable-atomic-util",

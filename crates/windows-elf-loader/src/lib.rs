@@ -2,7 +2,9 @@
 //!
 //! This crate configures Relink's default Windows mapping backend and native
 //! TLS resolver. It returns an unrelocated [`RawDylib`] so callers can choose
-//! the symbol scope and relocation policy themselves.
+//! the symbol scope and relocation policy. The default resolver cannot register
+//! TLS on Windows; libraries requiring TLS need a custom resolver through
+//! Relink's [`Loader`] and [`Domain`] APIs.
 #![warn(missing_docs)]
 
 use elf_loader::{AddressSpaceId, Domain};
@@ -10,7 +12,7 @@ use elf_loader::{
     Error, Loader,
     arch::NativeArch,
     image::RawDylib,
-    input::{ElfBinary, ElfFile},
+    input::{ElfBinary, ElfFile, ElfReader},
     memory::HostRegion,
     tls::DefaultTlsResolver,
 };
@@ -39,14 +41,16 @@ impl WinElfLoader {
         bytes: impl AsRef<[u8]>,
     ) -> Result<ElfDylib<()>, Error> {
         let object = ElfBinary::new(name, bytes.as_ref());
-        self.loader
-            .run(Domain::native(AddressSpaceId::PROCESS).with_tls(DefaultTlsResolver::new())?)
-            .load_dylib(object)
+        self.load_reader(object)
     }
 
     /// Opens and loads an ELF shared library from `name`.
     pub fn load_file(&mut self, name: &str) -> Result<ElfDylib<()>, Error> {
         let object = ElfFile::from_path(name)?;
+        self.load_reader(object)
+    }
+
+    fn load_reader(&self, object: impl ElfReader) -> Result<ElfDylib<()>, Error> {
         self.loader
             .run(Domain::native(AddressSpaceId::PROCESS).with_tls(DefaultTlsResolver::new())?)
             .load_dylib(object)

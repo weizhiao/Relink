@@ -1,53 +1,27 @@
 # windows-elf-loader
-Be capable of loading the elf dynamic library on Windows. This crate is implemented based on [rust-elfloader](https://github.com/weizhiao/rust-elfloader). The dynamic library used in example is also derived from [rust-elfloader](https://github.com/weizhiao/rust-elfloader).
 
-# Example
-```
-$ cargo run -r --example load
-```
-```rust
-use std::ffi::CStr;
-use elf_loader::{
-    image::{SyntheticSymbol, SyntheticModule},
-    relocation::Relocator,
-    AddressSpaceId, Domain,
-    tls::DefaultTlsResolver,
-};
-use windows_elf_loader::WinElfLoader;
+Load ELF shared libraries on Windows using [Relink](https://github.com/weizhiao/Relink).
+`WinElfLoader::load_file` reads a library from disk; `load_dylib` accepts a named
+byte buffer. Both return an unrelocated `RawDylib` for use with `Relocator`.
 
-fn main() {
-    extern "sysv64" fn print(s: *const i8) {
-        let s = unsafe { CStr::from_ptr(s).to_str().unwrap() };
-        println!("{}", s);
-    }
-    // Symbols required by dynamic library liba.so
-    let domain = Domain::native(AddressSpaceId::PROCESS).with_tls(DefaultTlsResolver::new()).unwrap();
-    let host = SyntheticModule::new(
-        &domain,
-        "__host",
-        [SyntheticSymbol::function(c"print", print as *const ())],
-    );
-    let mut loader: WinElfLoader = WinElfLoader::new();
-    // Load and relocate dynamic library liba.so
-    let liba = Relocator::new()
-        .run(
-            loader
-                .load_file(r".\crates\windows-elf-loader\example_dylib\liba.so")
-                .unwrap(),
-        )
-        .with_modules([host])
-        .unwrap()
-        .relocate()
-        .unwrap();
-    // Call function a in liba.so
-    let f = unsafe { liba.get::<extern "sysv64" fn() -> i32>("a").expect("symbol lookup failed").unwrap() };
-    println!("{}", f());
-}
+## Example
+
+On x86-64 Windows, run the bundled example from the repository root:
+
+```sh
+cargo run -p windows-elf-loader --release --example load
 ```
 
-# Note
-Here are the translated notes:
-* You need to manually handle the ELF dynamic library dependencies.
-* The default resolver does not provide managed dynamic TLS on Windows; ELF libraries that require it need a custom TLS resolver/provider.
-* Do not directly use syscalls within ELF dynamic libraries.
-* ABI conversion is required at the calling boundary between ELF dynamic libraries and Windows programs, as demonstrated in the example.
+The [example](examples/load.rs) supplies a host `print` function through a
+`SyntheticModule`, relocates `liba.so`, and calls its exported `a` function.
+Both the callback and the exported function use `extern "sysv64"` to match the
+ELF library's calling convention.
+
+## Requirements
+
+- Supply the library's dependencies and imported symbols explicitly.
+- ELF code must use the host's instruction set and the correct ABI at every
+  call boundary. Linux system calls cannot be used directly on Windows.
+- The default TLS resolver does not support registrations on Windows, including
+  static TLS and custom providers. Libraries requiring TLS need a custom
+  `TlsResolver`, configured through Relink's `Loader` and `Domain` APIs.

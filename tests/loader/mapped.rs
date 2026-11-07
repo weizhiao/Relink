@@ -46,9 +46,12 @@ fn dynamic_reuses_mapping() {
 
 #[test]
 fn scanned_dynamic_reuses_metadata() {
+    let mut run = LOADER.run(elf_loader::Domain::native(
+        elf_loader::AddressSpaceId::PROCESS,
+    ));
     let bytes = crate::fixture::fixtures().dylib.clone();
 
-    let ScannedElf::Dynamic(scanned) = LOADER
+    let ScannedElf::Dynamic(scanned) = run
         .scan(ElfBinary::owned("scanned.so", bytes))
         .expect("failed to scan dylib")
     else {
@@ -56,10 +59,7 @@ fn scanned_dynamic_reuses_metadata() {
     };
     let soname = scanned.soname().map(<[u8]>::to_vec);
 
-    let raw = LOADER
-        .run(elf_loader::Domain::native(
-            elf_loader::AddressSpaceId::PROCESS,
-        ))
+    let raw = run
         .load_scanned_dynamic(scanned)
         .expect("failed to load scanned dynamic image");
 

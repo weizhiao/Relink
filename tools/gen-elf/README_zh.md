@@ -1,6 +1,7 @@
 # gen-elf
 
-`gen-elf` 是一个用于生成测试用 ELF 文件（共享对象和可重定位对象）的辅助工具，专为测试 ELF 加载器而设计。它简化了创建具有特定符号结构、重定位条目和内存布局的二进制文件的过程，以便对 `elf_loader` 进行验证。
+`gen-elf` 为加载器测试生成共享库和可重定位 ELF 目标文件。
+你可以指定符号、重定位项和内存布局，并利用返回的元数据检查加载结果。
 
 ## 功能特性
 
@@ -45,6 +46,7 @@ println!("Generated ELF with {} relocations", output.relocations.len());
 
 ```rust
 use gen_elf::{Arch, ObjectWriter, SymbolDesc};
+use std::path::Path;
 
 let arch = Arch::X86_64;
 let writer = ObjectWriter::new(arch);
@@ -55,7 +57,7 @@ let symbols = vec![
 ];
 
 // 符号和重定位
-writer.write_file("test.o", &symbols, &[])?;
+writer.write_file(Path::new("test.o"), &symbols, &[])?;
 ```
 
 ### `RelocEntry`
@@ -81,4 +83,4 @@ writer.write_file("test.o", &symbols, &[])?;
 
 该工具特别适用于 `elf_loader` 的集成测试。你可以动态生成具有特定重定位类型的 ELF，使用加载器加载它，并通过检查 `ElfWriteOutput` 验证重定位是否正确应用。
 
-有关全面示例，请参阅 `tests/gen_elf.rs`。
+有关全面示例，请参阅 [`tests/relocator`](../../tests/relocator)。

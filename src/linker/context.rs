@@ -906,7 +906,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_handles_share_slot() {
+    fn duplicate_handle_does_not_add_alias_or_acquisition() {
         let fallback = ModuleHandle::new(SyntheticModule::empty(
             &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
             "fallback",
@@ -920,17 +920,19 @@ mod tests {
         let fallback = context.insert(node("fallback", fallback)).unwrap();
         context.add_alias(fallback.id(), "second").unwrap();
         let first = context.insert(node("first", module.clone())).unwrap();
-        let second = context.insert(node("second", module)).unwrap();
-
-        assert_eq!(first.id(), second.id());
+        let error = context.insert(node("second", module)).unwrap_err();
+        let Error::Linker(LinkerError::Context { reason }) = error else {
+            panic!("unexpected insertion error: {error}");
+        };
+        assert!(matches!(*reason, LinkContextError::SourceOccupied { source: id } if id == source));
         assert_eq!(context.module_id("second"), Some(fallback.id()));
         let slot = context.committed.module_for_source(source).unwrap();
         assert_eq!(context.committed.make_module_id(slot), first.id());
 
-        assert!(context.release(first).unwrap().is_empty());
+        assert_eq!(context.release(first).unwrap().len(), 1);
         assert_eq!(context.release(fallback).unwrap().len(), 1);
-        assert_eq!(context.module_id("second"), Some(second.id()));
-        assert_eq!(context.release(second).unwrap().len(), 1);
+        assert_eq!(context.module_id("second"), None);
+        assert!(context.is_empty());
     }
 
     #[test]

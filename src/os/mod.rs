@@ -1,8 +1,8 @@
-//! Operating system and environment abstractions.
+//! Memory mapping, page protection, and platform backends.
 //!
-//! This module provides traits for low-level platform operations such as
-//! memory mapping (`mmap`). It allows the ELF loader to be portable across
-//! different operating systems and bare-metal environments.
+//! [`Mmap`] creates and populates regions accessed through [`crate::memory`].
+//! Use [`DefaultMmap`] for the current platform, [`AllocMmap`] for allocator-backed
+//! storage, or [`FixedMmap`] for caller-provided storage.
 
 pub use defs::{MadviseAdvice, MapFlags, PageSize, ProtFlags, ThpPolicy};
 pub use mmap::{AllocMmap, FixedMmap};

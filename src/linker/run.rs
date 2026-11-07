@@ -175,7 +175,7 @@ where
 
         let slot = {
             let mut session: ResolveSession<RawDynamic<D, Arch, M::Region, Tls>, Arch> =
-                ResolveSession::new();
+                ResolveSession::new(context.committed.reservation_returns());
             let tokens = context.search_paths.tokens();
             let resolve_context =
                 LoadResolveContext::new(&mut context.committed, &mut session, tokens);
@@ -189,6 +189,19 @@ where
         Ok(Some(id))
     }
 
+    pub(in crate::linker) fn visible_root<Meta>(
+        &self,
+        context: &LinkContext<Meta, Arch, Tls>,
+        key: &[u8],
+    ) -> Option<PreparedLoad<D, Arch, M::Region, Tls>> {
+        PreparedLoad::visible(context, key).or_else(|| {
+            let canonical = self.linker.resolver.normalize_key(key);
+            (canonical != key)
+                .then(|| PreparedLoad::visible(context, canonical))
+                .flatten()
+        })
+    }
+
     /// Resolves and maps one module group without executing target code.
     pub fn prepare_load<Meta>(
         &mut self,
@@ -200,18 +213,12 @@ where
             .map(|id| context.committed.module_slot(id))
             .transpose()?;
         let key = self.linker.resolver.root_key(&root);
-        let existing = PreparedLoad::visible(context, key).or_else(|| {
-            let canonical = self.linker.resolver.normalize_key(key);
-            (canonical != key)
-                .then(|| PreparedLoad::visible(context, canonical))
-                .flatten()
-        });
-        if let Some(prepared) = existing {
+        if let Some(prepared) = self.visible_root(context, key) {
             return Ok(prepared);
         }
         let key = ModuleKey::from(key);
         let linker = self.linker;
-        let mut session = ResolveSession::new();
+        let mut session = ResolveSession::new(context.committed.reservation_returns());
         let tokens = context.search_paths.tokens();
         let mut loader = linker
             .loader
@@ -258,7 +265,7 @@ where
         }
 
         let linker = self.linker;
-        let mut session = ResolveSession::new();
+        let mut session = ResolveSession::new(context.committed.reservation_returns());
         let source = raw.state().instance_id().source_id();
         if let Some(root) = context.committed.module_for_source(source) {
             session.track(root, context.committed.generation(root));
@@ -388,7 +395,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         key: impl AsRef<[u8]>,
     ) -> Option<Self> {
         let root = context.committed.module_for_key(key)?;
-        let mut session = ResolveSession::new();
+        let mut session = ResolveSession::new(context.committed.reservation_returns());
         session.track(root, context.committed.generation(root));
         Some(Self::new(root, session, None, context))
     }

@@ -1,15 +1,12 @@
 //! Loading entry points and customization hooks.
 //!
-//! This module centers on [`Loader`], the main entry point for mapping ELF inputs
-//! into memory. A loader reads ELF metadata, maps segments, builds raw image types,
-//! and prepares them for relocation.
+//! [`Loader`] configures the architecture, memory mapper, and image user data.
+//! Bind a [`crate::Domain`] with [`Loader::run`] to scan or map an ELF input.
+//! The domain supplies the executor and optional TLS resolver.
 //!
-//! It also exposes the main customization points used during loading:
-//!
-//! - [`crate::observer::LoadObserver`] for observing program headers and loaded dynamic images
-//! - [`crate::observer::RelocationObserver`] events for lifecycle and relocation customization
-//! - `with_data` for selecting dynamic-image user data
-//! - `with_*` builder methods for swapping the memory-mapping backend or TLS resolver
+//! Attach a [`crate::observer::LoadObserver`] through [`LoaderRun::with_observer`]
+//! to inspect loading events. Pass mapped images to [`crate::Relocator`] for
+//! relocation and lifecycle customization.
 
 mod builder;
 mod defs;

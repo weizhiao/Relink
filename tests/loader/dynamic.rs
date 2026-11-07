@@ -69,27 +69,6 @@ fn static_exec() -> &'static [u8] {
 }
 
 #[test]
-fn loads_dylib() {
-    let loaded = LOADER
-        .run(elf_loader::Domain::native(
-            elf_loader::AddressSpaceId::PROCESS,
-        ))
-        .load_dylib(ElfBinary::new(
-            "provider.so",
-            &crate::fixture::fixtures().dylib,
-        ))
-        .expect("load_dylib should accept ET_DYN");
-
-    assert_eq!(loaded.path().as_bytes(), b"provider.so");
-    assert!(
-        loaded
-            .phdrs()
-            .iter()
-            .any(|phdr| phdr.program_type() == ElfProgramType::DYNAMIC)
-    );
-}
-
-#[test]
 #[cfg(any(
     feature = "use-syscall",
     all(any(target_os = "linux", target_os = "android"), feature = "std")
@@ -129,7 +108,10 @@ fn loads_exec() {
     all(any(target_os = "linux", target_os = "android"), feature = "std")
 ))]
 fn loads_scanned_exec() {
-    let ScannedElf::Dynamic(scanned) = LOADER
+    let mut run = LOADER.run(elf_loader::Domain::native(
+        elf_loader::AddressSpaceId::PROCESS,
+    ));
+    let ScannedElf::Dynamic(scanned) = run
         .scan(ElfBinary::new(
             "scanned_dynamic_exec",
             &crate::fixture::fixtures().exec,
@@ -141,10 +123,7 @@ fn loads_scanned_exec() {
     assert_eq!(scanned.ehdr().file_type(), ElfFileType::EXEC);
     let phdr_count = scanned.phdrs().len();
 
-    let loaded = LOADER
-        .run(elf_loader::Domain::native(
-            elf_loader::AddressSpaceId::PROCESS,
-        ))
+    let loaded = run
         .load_scanned_dynamic(scanned)
         .expect("load_scanned_dynamic should accept dynamic ET_EXEC");
     assert_eq!(loaded.phdrs().len(), phdr_count);
@@ -158,7 +137,10 @@ fn loads_scanned_exec() {
 
 #[test]
 fn classifies_images() {
-    let ScannedElf::Dynamic(dynamic) = LOADER
+    let mut run = LOADER.run(elf_loader::Domain::native(
+        elf_loader::AddressSpaceId::PROCESS,
+    ));
+    let ScannedElf::Dynamic(dynamic) = run
         .scan(ElfBinary::new(
             "scanned.so",
             &crate::fixture::fixtures().dylib,
@@ -167,6 +149,14 @@ fn classifies_images() {
     else {
         panic!("PT_DYNAMIC image should scan as dynamic");
     };
+    assert!(matches!(
+        run.load(ElfBinary::new(
+            "loaded.so",
+            &crate::fixture::fixtures().dylib
+        ))
+        .expect("load should classify a shared library"),
+        elf_loader::image::RawElf::Dylib(_)
+    ));
     assert_eq!(dynamic.ehdr().file_type(), ElfFileType::DYN);
     assert!(
         dynamic
@@ -175,12 +165,20 @@ fn classifies_images() {
             .any(|phdr| phdr.program_type() == ElfProgramType::DYNAMIC)
     );
 
-    let ScannedElf::StaticExec(exec) = LOADER
+    let ScannedElf::StaticExec(exec) = run
         .scan(ElfBinary::new("static_exec", static_exec()))
         .expect("scan should accept static executable metadata")
     else {
         panic!("executable without PT_DYNAMIC should scan as static exec");
     };
+    // Use position-independent placement for the mapped static-image case.
+    let mut bytes = mark_as_static_exec(crate::fixture::fixtures().dylib.clone());
+    bytes[E_TYPE_OFFSET..E_TYPE_OFFSET + 2].copy_from_slice(&ElfFileType::DYN.raw().to_le_bytes());
+    assert!(matches!(
+        run.load(ElfBinary::new("static-pie", &bytes))
+            .expect("load should classify an image without PT_DYNAMIC"),
+        elf_loader::image::RawElf::Exec(elf_loader::image::RawExec::Static(_))
+    ));
     assert_eq!(exec.ehdr().file_type(), ElfFileType::EXEC);
     assert!(
         exec.phdrs()

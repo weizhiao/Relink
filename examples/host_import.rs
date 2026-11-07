@@ -10,11 +10,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     fn library_path(cache: &LdCache, name: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
         let loader = Loader::new();
+        let run = loader.run(Domain::native(AddressSpaceId::PROCESS));
         cache
             .candidates(name)
             .find(|path| {
                 ElfFile::from_path(path)
-                    .and_then(|file| loader.read_ehdr(&file))
+                    .and_then(|file| run.read_ehdr(&file))
                     .is_ok()
             })
             .map(PathBuf::from)
@@ -35,10 +36,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     context.insert_batch([GraphModule::new("libc.so.6", libc)])?;
 
     // Relink loads zlib and uses the imported host libc to satisfy its dependency.
+    let main_search = host::main_search()?;
+    let resolver = SearchPathResolver::with_config(&main_search, SearchConfig::new().cache(cache));
     let loaded = Linker::new()
-        .with_resolver(SearchPathResolver::with_config(
-            SearchConfig::new().cache(cache),
-        ))
+        .with_resolver(resolver)
         .run()
         .load(&mut context, path)?;
     let module = context.module(loaded.root())?;

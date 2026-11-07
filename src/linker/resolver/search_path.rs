@@ -8,13 +8,13 @@ use crate::{
         ModuleSearch, PathTokens, SharedDir, default_module_search, library_path_components,
         normalize_dir,
     },
-    input::{BufferedElfFile, ElfReader, Path, PathBuf},
+    input::{BufferedElfFile, ElfReader, ModulePath, Path, PathBuf},
     loader::read_ehdr,
     os::path_is_dir,
     relocation::RelocationArch,
     sync::{Arc, arc_unsize},
 };
-use alloc::{boxed::Box, vec::Vec};
+use alloc::{borrow::ToOwned, boxed::Box, vec::Vec};
 use core::fmt;
 
 type PathProvider = dyn for<'req> Fn(CandidateRequest<'req>, &mut Vec<PathBuf>) -> Result<()>
@@ -136,7 +136,7 @@ impl fmt::Debug for CandidateRequest<'_> {
 /// library directories explicitly; no host settings are read automatically.
 #[derive(Clone, Debug, Default)]
 pub struct SearchConfig {
-    library_path: Option<(PathBuf, PathBuf)>,
+    library_path: Option<PathBuf>,
     cache: Option<LdCache>,
     default_dirs: Vec<PathBuf>,
 }
@@ -147,22 +147,18 @@ impl SearchConfig {
         Self::default()
     }
 
-    /// Sets the raw `LD_LIBRARY_PATH` value and the main executable's directory.
+    /// Sets the raw `LD_LIBRARY_PATH` value.
     ///
     /// Both `:` and `;` separate directories; empty components mean the current
     /// working directory, while an entirely empty value adds no directories.
-    /// `$ORIGIN` uses `executable_dir`, not the requesting library's directory.
+    /// `$ORIGIN` uses the main executable supplied to [`SearchPathResolver::with_config`].
     /// `$LIB` and `$PLATFORM` use the link context's [`SearchPathPool`](crate::image::SearchPathPool)
     /// token settings. Entries with unavailable token values are skipped.
     ///
     /// The caller must omit this input in secure-execution mode. This preset
     /// does not implement glibc's complete privileged-process loading policy.
-    pub fn library_path(
-        mut self,
-        value: impl AsRef<Path>,
-        executable_dir: impl AsRef<Path>,
-    ) -> Self {
-        self.library_path = Some((value.as_ref().into(), executable_dir.as_ref().into()));
+    pub fn library_path(mut self, value: impl AsRef<Path>) -> Self {
+        self.library_path = Some(value.as_ref().into());
         self
     }
 
@@ -193,6 +189,7 @@ impl SearchConfig {
 #[derive(Clone, Default)]
 pub struct SearchPathResolver {
     entries: Vec<SearchPathEntry>,
+    executable: Option<(ModulePath, Vec<SharedDir>)>,
     opener: Option<Arc<Opener>>,
 }
 
@@ -200,6 +197,7 @@ impl fmt::Debug for SearchPathResolver {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SearchPathResolver")
             .field("entries", &self.entries)
+            .field("executable", &self.executable)
             .field("custom_opener", &self.opener.is_some())
             .finish()
     }
@@ -211,21 +209,32 @@ impl SearchPathResolver {
     pub const fn new() -> Self {
         Self {
             entries: Vec::new(),
+            executable: None,
             opener: None,
         }
     }
 
-    /// Searches inherited RPATH, supplied library paths, direct RUNPATH, cache,
+    /// Searches inherited RPATH, supplied executable RPATH, library paths, RUNPATH, cache,
     /// then default directories. Direct-loader RUNPATH suppresses inherited RPATH;
     /// names containing separators are opened directly.
     ///
-    /// This ordering does not implement glibc's process namespace, executable RPATH
-    /// fallback, hardware capabilities, `DF_1_NODEFLIB`, auditing, or secure-execution policy.
-    pub fn with_config(config: SearchConfig) -> Self {
+    /// This ordering does not implement glibc's process namespace, hardware
+    /// capabilities, `DF_1_NODEFLIB`, auditing, or secure-execution policy.
+    ///
+    /// `executable` supplies both fallback RPATH and the directory used for
+    /// `$ORIGIN` in library paths. Supply the base namespace's main executable
+    /// even when resolving another namespace. Its RPATH is ignored if it has
+    /// RUNPATH. Expanded directories and their caches are shared with its metadata.
+    pub fn with_config(executable: &ModuleSearch, config: SearchConfig) -> Self {
         let mut resolver = Self::new();
+        let dirs = executable
+            .rpath_dirs()
+            .filter(|_| executable.runpath_dirs().is_none())
+            .unwrap_or_default();
+        resolver.executable = Some((executable.path().clone(), dirs.to_vec()));
         resolver.push_rpath();
-        if let Some((value, origin)) = config.library_path {
-            resolver.push_library_path(value, origin);
+        if let Some(value) = config.library_path {
+            resolver.push_library_path(value, executable.path().parent());
         }
         resolver.push_runpath();
         if let Some(cache) = config.cache {
@@ -261,6 +270,7 @@ impl SearchPathResolver {
     /// Appends inherited `DT_RPATH` directories.
     ///
     /// The direct loader is visited first, followed by its loader chain. The
+    /// configured executable RPATH is tried next if not already visited. The
     /// entire source is skipped when the direct loader has `DT_RUNPATH`.
     pub fn push_rpath(&mut self) -> &mut Self {
         self.push_entry(SearchPathEntry::Rpath)
@@ -276,7 +286,9 @@ impl SearchPathResolver {
 
     /// Appends a fixed search directory.
     pub fn push_fixed_dir(&mut self, dir: impl AsRef<Path>) -> &mut Self {
-        self.push_entry(SearchPathEntry::Dir(SharedDir::new(normalize_dir(dir))))
+        self.push_entry(SearchPathEntry::Dir(SharedDir::new(normalize_dir(
+            dir.as_ref().to_owned(),
+        ))))
     }
 
     /// Appends the raw library-path value at this point in the search order.
@@ -513,10 +525,14 @@ impl SearchPathResolver {
                         continue;
                     }
                     let mut found = None;
+                    let mut visited_executable = false;
                     request.visit_loaders(|owner| {
                         let Some(dirs) = owner.rpath_dirs() else {
                             return Ok(true);
                         };
+                        visited_executable |= self.executable.as_ref().is_some_and(|(path, _)| {
+                            core::ptr::eq(owner.path().as_bytes(), path.as_bytes())
+                        });
                         found = self.try_dirs(
                             dirs,
                             requested,
@@ -527,6 +543,18 @@ impl SearchPathResolver {
                         Ok(found.is_none())
                     })?;
                     if let Some(file) = found {
+                        return Ok(file);
+                    }
+                    if !visited_executable
+                        && let Some((_, dirs)) = &self.executable
+                        && let Some(file) = self.try_dirs(
+                            dirs,
+                            requested,
+                            &mut candidate,
+                            &mut incompatible,
+                            validate,
+                        )?
+                    {
                         return Ok(file);
                     }
                 }

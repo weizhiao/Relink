@@ -399,18 +399,10 @@ impl<L: ElfLayout> ElfSymbol<L> {
 ///
 /// This structure provides safe access to the ELF string table, which contains
 /// null-terminated strings for symbol names and other ELF metadata.
+#[derive(Clone)]
 pub(crate) struct ElfStringTable {
     /// Borrowed view of the raw string table bytes.
     view: MappedView<u8>,
-}
-
-impl Clone for ElfStringTable {
-    #[inline]
-    fn clone(&self) -> Self {
-        Self {
-            view: self.view.clone(),
-        }
-    }
 }
 
 impl ElfStringTable {

@@ -1,6 +1,6 @@
 //! # Relink
 //!
-//! Relink is a high-performance, `no_std`-friendly ELF loader and runtime linker for Rust.
+//! Relink is a `no_std`-friendly ELF loader and runtime linker for Rust.
 //! It maps ELF images from files or memory, performs relocations at runtime, and exposes
 //! typed symbol lookups with Rust lifetimes.
 //!
@@ -10,28 +10,17 @@
 //!
 //! - Use [`LoaderRun::load`] to auto-detect whether the input is a dylib, executable, or
 //!   relocatable object.
-//! - Use [`Loader::scan`] to classify executable or dynamic ELF metadata without mapping it.
 //! - Use [`LoaderRun::load_dylib`] or [`LoaderRun::load_exec`] when you want strict type checks.
 //! - Use [`LoaderRun::load_dynamic`] when you want any `PT_DYNAMIC` image, including a dynamic
 //!   `ET_EXEC`.
-//! - Use [`Loader::scan`] and [`LoaderRun::load_scanned_dynamic`] to split dynamic metadata
+//! - Use [`LoaderRun::scan`] and [`LoaderRun::load_scanned_dynamic`] to split dynamic metadata
 //!   discovery from mapping.
 //! - Use `LoaderRun::load_object` to load `ET_REL` object files when the `object` feature is enabled.
 //! - Inputs can come from file paths, [`input::Path`] / [`input::PathBuf`], raw bytes,
 //!   [`input::ElfFile`], or [`input::ElfBinary`].
 //!
-//! ## Highlights
-//!
-//! - Safer symbol lifetimes. Typed symbols borrow the loaded image, so they cannot outlive
-//!   the library that produced them.
-//! - Hybrid linking. Compose `.so`, `.o`, and synthetic modules at runtime with `modules()` or an
-//!   explicit [`LocalScope`].
-//! - Explicit dependency loading. Build your own dependency policy with an
-//!   actual [`Loader`], [`linker::KeyResolver`], [`Linker`], and [`LinkContext`].
-//! - Deep customization. Inject host or bridge symbols with
-//!   [`image::SyntheticModule`] and intercept relocations with handlers.
-//! - Optional built-ins. The native lazy binder, relocatable object loading, logging, and
-//!   versioned symbol lookup are feature-gated; TLS and custom lazy binders remain available.
+//! Typed symbols borrow their loaded image. Use [`RelocatorRun::with_modules`] or
+//! [`LocalScope`] to resolve references against other ELF images and synthetic modules.
 //!
 //! ## Example
 //!
@@ -148,6 +137,10 @@
 //!
 //! ## Feature Flags
 //!
+//! The default `full` feature enables `std`, `object`, and `lazy-binding`.
+//! Disable default features for `no_std` builds. `use-syscall` and `std` are
+//! mutually exclusive.
+//!
 //! - TLS relocation handling is always available. Pass a [`Domain`] to
 //!   [`Loader::run`] or [`LinkContext::new`]. Domains start with TLS disabled;
 //!   use [`Domain::with_tls`] to enable it.
@@ -160,7 +153,7 @@
 //! - `log`, `portable-atomic`, and `use-syscall`: optional integrations for diagnostics and
 //!   specialized targets.
 //!
-//! ## More
+//! ## Platforms and Examples
 //!
 //! - The [`examples`](https://github.com/weizhiao/Relink/tree/main/examples) directory
 //!   covers loading from memory, `LinkerRun::load`, scan-first linking, observer hooks,
@@ -257,8 +250,5 @@ pub use loader::{Loader, LoaderRun};
 pub use relocation::{Relocator, RelocatorRun};
 pub use runtime::{AddressSpaceId, Domain, DomainId};
 
-/// A type alias for `Result`s returned by `elf_loader` functions.
-///
-/// This is a convenience alias that eliminates the need to repeatedly specify
-/// the `Error` type in function signatures.
+/// Result returned by loader and linker operations.
 pub type Result<T> = core::result::Result<T, Error>;

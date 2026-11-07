@@ -24,4 +24,4 @@ mod native;
 mod tls;
 
 pub use error::HostError;
-pub use import::open;
+pub use import::{main_search, open};

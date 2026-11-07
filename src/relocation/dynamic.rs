@@ -1,4 +1,4 @@
-//! Relocation of elf objects
+//! Dynamic ELF relocation.
 use crate::{
     ByteRepr, LazyBindingError, RelocReason, RelocationError, Result,
     arch::NativeArch,

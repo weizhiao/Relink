@@ -1,15 +1,15 @@
 //! Construct a synthetic module from a native library and its ELF export metadata.
 use super::{error::metadata, native::NativeLibrary, tls::HostTls};
 use crate::{
-    ByteRepr, Domain, Loader, Result,
+    AddressSpaceId, ByteRepr, Domain, Loader, Result,
     arch::NativeArch,
     elf::{
         ElfDyn, ElfDynamicTag, ElfGnuHeader, ElfPhdr, ElfProgramType, ElfSymbol, ElfSymbolType,
         abi, parse_dynamic_entries,
         version::{VerDef, VerDefAux},
     },
-    image::{ModuleHandle, SyntheticModule, SyntheticSymbol},
-    input::{ElfFile, ElfReader, ElfReaderExt, Path},
+    image::{ModuleHandle, ModuleSearch, SearchPathPool, SyntheticModule, SyntheticSymbol},
+    input::{ElfFile, ElfReader, ElfReaderExt, ModulePath, Path},
     sync::Arc,
     tls::{DefaultTlsResolver, TlsInfo},
 };
@@ -48,7 +48,7 @@ pub unsafe fn open(
 ) -> Result<ModuleHandle> {
     let path = path.as_ref();
     let file = ElfFile::from_path(path)?;
-    let header = Loader::new().read_ehdr(&file)?;
+    let header = Loader::new().run(domain.clone()).read_ehdr(&file)?;
     let headers = file.read_to_vec::<ElfPhdr>(header.e_phoff(), header.e_phnum())?;
     let reader = FileView {
         file: &file,
@@ -99,6 +99,73 @@ pub unsafe fn open(
         module.insert(import_symbol(symbol, name, version, &library)?);
     }
     Ok(module.into())
+}
+
+/// Reads search metadata for the current process's main executable.
+///
+/// Reads program headers and dynamic strings from `/proc/self/exe`, including
+/// when the original executable pathname has been replaced. The path returned by
+/// `std::env::current_exe` supplies the directory for `$ORIGIN` expansion.
+/// No executable is loaded and no constructors are run. A main executable without
+/// a dynamic segment returns metadata with no RPATH or RUNPATH.
+///
+/// This is a file snapshot, not glibc's cached search state. `$LIB` and `$PLATFORM`
+/// are not inferred; entries requiring these tokens are skipped. For explicit
+/// token settings, construct metadata with [`SearchPathPool::module_search`].
+/// Requires access to procfs and returns an error if the executable cannot be read.
+pub fn main_search() -> Result<ModuleSearch> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let executable = std::env::current_exe().map_err(metadata)?;
+    let path =
+        ModulePath::try_from(Path::new(executable.as_os_str().as_bytes())).map_err(metadata)?;
+    let file = ElfFile::from_path("/proc/self/exe")?;
+    let domain = Domain::native(AddressSpaceId::PROCESS);
+    let header = Loader::new().run(domain).read_ehdr(&file)?;
+    let headers = file.read_to_vec::<ElfPhdr>(header.e_phoff(), header.e_phnum())?;
+    if !headers
+        .iter()
+        .any(|header| header.program_type() == ElfProgramType::DYNAMIC)
+    {
+        return Ok(SearchPathPool::new().module_search(path, None, None, None));
+    }
+    let reader = FileView {
+        file: &file,
+        headers: &headers,
+    };
+    let entries = reader.read_dynamic_entries()?;
+    // A dynamic segment need not contain any search strings.
+    if !entries.iter().any(|entry| {
+        matches!(
+            entry.tag(),
+            ElfDynamicTag::SONAME | ElfDynamicTag::RPATH | ElfDynamicTag::RUNPATH
+        )
+    }) {
+        return Ok(SearchPathPool::new().module_search(path, None, None, None));
+    }
+    let address = dynamic_value(&entries, ElfDynamicTag::STRTAB)
+        .ok_or_else(|| metadata("missing DT_STRTAB"))?;
+    let size = dynamic_value(&entries, ElfDynamicTag::STRSZ)
+        .ok_or_else(|| metadata("missing DT_STRSZ"))?;
+    let strings = reader.read_array::<u8>(address, size)?;
+    search_metadata(path, &entries, &strings)
+}
+
+fn search_metadata(path: ModulePath, entries: &[ElfDyn], strings: &[u8]) -> Result<ModuleSearch> {
+    let string = |tag| {
+        dynamic_value(entries, tag)
+            .map(|offset| read_string(strings, offset))
+            .transpose()
+    };
+    let soname = string(ElfDynamicTag::SONAME)?;
+    let runpath = string(ElfDynamicTag::RUNPATH)?;
+    let rpath = string(ElfDynamicTag::RPATH)?;
+    Ok(SearchPathPool::new().module_search(
+        path,
+        soname.as_deref().map(CStr::to_bytes),
+        runpath.as_deref().map(CStr::to_bytes),
+        rpath.as_deref().map(CStr::to_bytes),
+    ))
 }
 
 fn import_symbol(
@@ -267,9 +334,13 @@ fn export_version(
 }
 
 fn read_string(strings: &[u8], offset: usize) -> Result<CString> {
-    CStr::from_bytes_until_nul(&strings[offset..])
-        .map(CString::from)
-        .map_err(metadata)
+    CStr::from_bytes_until_nul(
+        strings
+            .get(offset..)
+            .ok_or_else(|| metadata("string offset outside DT_STRTAB"))?,
+    )
+    .map(CString::from)
+    .map_err(metadata)
 }
 
 fn is_export(symbol: &ElfSymbol) -> bool {
@@ -281,4 +352,43 @@ fn is_export(symbol: &ElfSymbol) -> bool {
                 | ElfSymbolType::OBJECT
                 | ElfSymbolType::TLS
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn main_search_reads_current_executable() {
+        use std::os::unix::ffi::OsStrExt;
+        let search = main_search().unwrap();
+        assert_eq!(
+            search.path().as_bytes(),
+            std::env::current_exe().unwrap().as_os_str().as_bytes()
+        );
+    }
+
+    #[test]
+    fn search_metadata_preserves_empty_runpath_and_expands_origin() {
+        let path = ModulePath::try_from(Path::new("/app/main")).unwrap();
+        let entries = [
+            ElfDyn::new(ElfDynamicTag::RUNPATH, 0),
+            ElfDyn::new(ElfDynamicTag::RPATH, 1),
+        ];
+        let search = search_metadata(path, &entries, b"\0$ORIGIN/lib\0").unwrap();
+        assert_eq!(search.runpath().unwrap().count(), 0);
+        assert_eq!(
+            search.rpath().unwrap().collect::<Vec<_>>(),
+            [Path::new("/app/lib")]
+        );
+    }
+
+    #[test]
+    fn search_metadata_rejects_invalid_strings() {
+        for strings in [b"abc".as_slice(), b"\0".as_slice()] {
+            let path = ModulePath::try_from(Path::new("/app/main")).unwrap();
+            let entries = [ElfDyn::new(ElfDynamicTag::RPATH, 1)];
+            assert!(search_metadata(path, &entries, strings).is_err());
+        }
+    }
 }

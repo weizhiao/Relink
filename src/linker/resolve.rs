@@ -361,9 +361,7 @@ where
         ) -> Result<ModuleSlot>,
     {
         if !self.session.contains_pending(root) {
-            if self.committed.contains_module(root) {
-                self.session.track(root, self.committed.generation(root));
-            }
+            self.session.track(root, self.committed.generation(root));
             return Ok(());
         }
 

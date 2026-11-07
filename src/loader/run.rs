@@ -166,12 +166,28 @@ where
         object: Box<dyn ElfReader>,
         ehdr: ElfHeader<Arch::Layout>,
     ) -> Result<ScannedElf<Arch>> {
-        scan::<Arch>(
-            object,
-            &mut self.buf,
-            self.search_paths.as_deref_mut(),
+        logging::debug!("Scanning ELF metadata: {}", object.path());
+
+        if !ExpectedElf::Executable.matches(&ehdr) {
+            return Err(ExpectedElf::Executable.error(ehdr.file_type()).into());
+        }
+        let phdrs = self.buf.prepare_phdrs(&ehdr, &object)?.unwrap_or_default();
+        let has_dynamic = has_dynamic_phdr(phdrs);
+        let phdrs = Box::from(phdrs);
+        let path = PathBuf::from(object.path());
+        let builder = ScanBuilder {
+            path,
             ehdr,
-        )
+            phdrs,
+            reader: object,
+        };
+
+        if has_dynamic {
+            return ScannedDynamic::<Arch>::from_builder(builder, self.search_paths.as_deref_mut())
+                .map(ScannedElf::Dynamic);
+        }
+
+        ScannedExec::<Arch>::from_builder(builder).map(ScannedElf::StaticExec)
     }
 }
 
@@ -205,21 +221,40 @@ where
                     Err(ParseEhdrError::RelocatableObjectsDisabled.into())
                 }
             }
-            ElfFileType::EXEC => Ok(RawElf::Exec(self.load_exec_from_ehdr(&object, ehdr)?)),
-            ElfFileType::DYN => {
-                let is_pie = {
-                    let phdrs = self.read_phdrs(&object, &ehdr)?.unwrap_or_default();
-                    let has_dynamic = has_dynamic_phdr(phdrs);
-                    phdrs
+            ElfFileType::EXEC | ElfFileType::DYN => {
+                let phdrs = self.buf.prepare_phdrs(&ehdr, &object)?.unwrap_or_default();
+                let is_exec = ehdr.file_type() == ElfFileType::EXEC
+                    || phdrs
                         .iter()
-                        .any(|p| p.program_type() == ElfProgramType::INTERP)
-                        || !has_dynamic
-                };
-                if is_pie {
-                    Ok(RawElf::Exec(self.load_exec_from_ehdr(&object, ehdr)?))
+                        .any(|phdr| phdr.program_type() == ElfProgramType::INTERP)
+                    || !has_dynamic_phdr(phdrs);
+                let (builder, has_dynamic) = Self::prepare_image(
+                    self.loader,
+                    self.domain.clone(),
+                    &mut self.observer,
+                    &object,
+                    ehdr,
+                    phdrs,
+                    !is_exec,
+                )?;
+                if is_exec {
+                    Self::finish_exec_load(
+                        builder,
+                        phdrs,
+                        has_dynamic,
+                        &mut self.observer,
+                        self.search_paths.as_deref_mut(),
+                    )
+                    .map(RawElf::Exec)
                 } else {
-                    let dynamic = self.load_dynamic_impl(&object, ehdr)?;
-                    Ok(RawElf::Dylib(dynamic.into()))
+                    Self::finish_dynamic_load(
+                        builder,
+                        phdrs,
+                        &mut self.observer,
+                        self.search_paths.as_deref_mut(),
+                        "Loaded dynamic image",
+                    )
+                    .map(|image| RawElf::Dylib(image.into()))
                 }
             }
             other => Err(ParseEhdrError::UnexpectedFileType {
@@ -489,10 +524,25 @@ where
             phdrs,
             false,
         )?;
-        let mut exec = builder.build_exec(phdrs, has_dynamic, self.search_paths.as_deref_mut())?;
+        Self::finish_exec_load(
+            builder,
+            phdrs,
+            has_dynamic,
+            &mut self.observer,
+            self.search_paths.as_deref_mut(),
+        )
+    }
+
+    fn finish_exec_load(
+        builder: ImageBuilder<Tls, D, Arch, M::Region>,
+        phdrs: &[ElfPhdr<Arch::Layout>],
+        has_dynamic: bool,
+        observer: &mut Obs,
+        search_paths: Option<&mut SearchPathPool>,
+    ) -> Result<RawExec<D, Arch, M::Region, Tls>> {
+        let mut exec = builder.build_exec(phdrs, has_dynamic, search_paths)?;
         if let RawExec::Dynamic(dynamic) = &mut exec {
-            self.observer
-                .on_after_dynamic_load(AfterDynamicLoadEvent::new(dynamic))?;
+            observer.on_after_dynamic_load(AfterDynamicLoadEvent::new(dynamic))?;
         }
         let base = exec.base();
 
@@ -520,61 +570,6 @@ fn image_entry<Arch: RelocationArch>(base: VmAddr, ehdr: &ElfHeader<Arch::Layout
         base + VmOffset::new(ehdr.e_entry())
     } else {
         VmAddr::new(ehdr.e_entry())
-    }
-}
-
-fn scan<Arch: RelocationArch>(
-    object: Box<dyn ElfReader>,
-    buf: &mut ElfBuf,
-    search_paths: Option<&mut SearchPathPool>,
-    ehdr: ElfHeader<Arch::Layout>,
-) -> Result<ScannedElf<Arch>> {
-    logging::debug!("Scanning ELF metadata: {}", object.path());
-
-    if !ExpectedElf::Executable.matches(&ehdr) {
-        return Err(ExpectedElf::Executable.error(ehdr.file_type()).into());
-    }
-    let phdrs = buf.prepare_phdrs(&ehdr, &object)?.unwrap_or_default();
-    let has_dynamic = has_dynamic_phdr(phdrs);
-    let phdrs = Box::from(phdrs);
-    let path = PathBuf::from(object.path());
-    let builder = ScanBuilder {
-        path,
-        ehdr,
-        phdrs,
-        reader: object,
-    };
-
-    if has_dynamic {
-        return ScannedDynamic::<Arch>::from_builder(builder, search_paths)
-            .map(ScannedElf::Dynamic);
-    }
-
-    ScannedExec::<Arch>::from_builder(builder).map(ScannedElf::StaticExec)
-}
-
-impl<D: Send + Sync + 'static, Arch, M> Loader<D, Arch, M>
-where
-    (): LoadObserver<D, Arch>,
-    Arch: RelocationArch,
-    M: Mmap,
-{
-    /// Reads the ELF header without creating runtime state.
-    #[inline]
-    pub fn read_ehdr(&self, object: &(impl ElfReader + ?Sized)) -> Result<ElfHeader<Arch::Layout>> {
-        read_ehdr::<Arch>(object)
-    }
-
-    /// Scans an executable or dynamic ELF image without mapping its segments.
-    #[inline]
-    pub fn scan<I>(&self, input: I) -> Result<ScannedElf<Arch>>
-    where
-        I: IntoElfReader,
-        I::Reader: 'static,
-    {
-        let object = input.into_reader()?;
-        let ehdr = self.read_ehdr(&object)?;
-        scan::<Arch>(Box::new(object), &mut ElfBuf::new(), None, ehdr)
     }
 }
 

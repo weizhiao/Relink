@@ -1,6 +1,4 @@
-//! Section-header related ELF types
-//!
-//! This module contains section-header views used while scanning ELF sections.
+//! ELF section-header types used when scanning image sections.
 
 use super::{
     layout::{ElfLayout, NativeElfLayout},

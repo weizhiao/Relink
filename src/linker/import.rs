@@ -13,16 +13,17 @@ use crate::{
 };
 use alloc::{
     boxed::Box,
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     vec::Vec,
 };
 
 struct PreparedModule<Meta, Arch: RelocationArch> {
     key: ModuleKey,
-    existing: Option<ModuleSlot>,
     instance: ModuleInstanceId,
     module: ModuleHandle<Arch>,
     deps: Box<[ModuleInstanceId]>,
+    direct_deps: Box<[ModuleSlot]>,
+    retained: ModuleScope<Arch>,
     meta: Meta,
 }
 
@@ -289,156 +290,129 @@ where
     /// Dependencies may refer to committed modules or other nodes in the batch,
     /// including cycles. Each input node adds one direct acquisition and returns
     /// one lease in input order. Modules sharing a key become ordered lookup
-    /// candidates. An exact instance already in this context is reused and its
-    /// new key is bound to the existing module; the supplied metadata and
-    /// dependency list are then ignored. A different instance of an occupied
-    /// source is rejected.
+    /// candidates. Sources must be unique within the batch and absent from this
+    /// context, even when the supplied handle is the same instance. Reference
+    /// committed modules through dependencies; use `add_alias` for extra names.
+    /// New entries retain their dependency and runtime-binding
+    /// closure so detached modules keep their providers alive after release.
     pub fn insert_batch(
         &mut self,
         modules: impl IntoIterator<Item = GraphModule<Meta, Arch>>,
     ) -> Result<Box<[ModuleLease]>> {
-        let modules = modules.into_iter().collect::<Vec<_>>();
-        for node in &modules {
-            self.committed.ensure_domain(node.module.domain_id())?;
-        }
-
+        let domain = self.domain.id();
         let mut sources = BTreeSet::<ModuleSourceId>::new();
-        let mut instances = BTreeSet::<ModuleInstanceId>::new();
-        let mut planned = Vec::with_capacity(modules.len());
+        let mut indices = BTreeMap::<ModuleInstanceId, usize>::new();
+        let mut planned = Vec::new();
 
+        // Collect and admit the complete batch before following forward edges.
         for GraphModule {
-            key: module_key,
+            key,
             module,
             deps,
             meta,
         } in modules
         {
+            self.committed.ensure_domain(module.domain_id())?;
             let instance = module.state().instance_id();
             let source = instance.source_id();
-            if !sources.insert(source) {
+            if !sources.insert(source) || self.committed.module_for_source(source).is_some() {
                 return Err(
                     LinkerError::context(LinkContextError::SourceOccupied { source }).into(),
                 );
             }
-
-            let existing = match self.committed.module_for_source(source) {
-                Some(slot) => {
-                    let committed = self
-                        .committed
-                        .module(slot)
-                        .expect("source index must refer to a committed module");
-                    if committed.handle().state().instance_id() != instance {
-                        return Err(LinkerError::context(LinkContextError::SourceOccupied {
-                            source,
-                        })
-                        .into());
-                    }
-                    Some(slot)
-                }
-                None => None,
-            };
-            instances.insert(instance);
+            indices.insert(instance, planned.len());
             planned.push(PreparedModule {
-                key: module_key,
-                existing,
+                key,
                 instance,
                 module,
                 deps,
                 meta,
+                direct_deps: Box::new([]),
+                retained: ModuleScope::new(domain),
             });
         }
 
-        for node in &planned {
-            if node.existing.is_some() {
-                continue;
-            }
-            let validate = |id| -> Result<()> {
-                (instances.contains(&id) || self.committed.module_for_binding(id).is_some())
-                    .then_some(())
-                    .ok_or_else(|| {
-                        LinkerError::context(LinkContextError::DependencyMissing { id }).into()
-                    })
-            };
-            node.deps.iter().copied().try_for_each(&validate)?;
-            node.module.state().with_effects(|bindings, pins| {
-                bindings.iter().chain(pins).copied().try_for_each(validate)
-            })?;
-        }
-
-        self.committed.reclaim_returned_slots();
-        let mut slots = BTreeMap::<ModuleInstanceId, ModuleSlot>::new();
-        let mut new_modules = 0;
-        for node in &planned {
-            let slot = match node.existing {
-                Some(slot) => slot,
-                None => {
-                    new_modules += 1;
-                    self.committed.alloc_module()
-                }
-            };
-            slots.insert(node.instance, slot);
-        }
-        let resolved = planned
-            .iter()
-            .map(|node| {
-                if node.existing.is_some() {
-                    return Vec::new().into_boxed_slice();
-                }
-                node.deps
-                    .iter()
-                    .copied()
-                    .map(|id| {
-                        slots
-                            .get(&id)
-                            .copied()
-                            .or_else(|| self.committed.module_for_binding(id))
-                            .expect("validated dependency must have a module slot")
-                    })
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice()
-            })
-            .collect::<Vec<_>>();
-
-        let mut pins = Vec::new();
-        for node in &planned {
-            if node.existing.is_some() {
-                continue;
-            }
-            node.module.state().with_effects(|_, requested| {
-                for provider in requested {
-                    let slot = slots
-                        .get(provider)
-                        .copied()
-                        .or_else(|| self.committed.module_for_binding(*provider))
-                        .expect("validated pin must have a module slot");
-                    if !pins.contains(&slot) {
-                        pins.push(slot);
-                    }
-                }
+        // Validate and retain each new node's dependency/binding closure before
+        // changing storage. Scopes belong to entries, not modules, so cycles do
+        // not create Arc cycles between module handles.
+        let mut requested_pins = BTreeSet::new();
+        for index in 0..planned.len() {
+            planned[index].module.state().with_effects(|_, pins| {
+                requested_pins.extend(pins.iter().copied());
             });
-        }
-
-        let domain = self.domain.id();
-        let mut leases = Vec::with_capacity(planned.len());
-        self.committed.publish(new_modules, |publication| {
-            for (node, deps) in planned.into_iter().zip(resolved) {
-                let slot = slots[&node.instance];
-                let id = if node.existing.is_none() {
-                    let retained = ModuleScope::new(domain);
-                    publication.insert(
-                        slot,
-                        StoredEntry::new(
-                            node.key.clone(),
-                            node.module,
-                            deps,
-                            retained,
-                            1,
-                            node.meta,
-                        ),
-                    )
+            let mut scope = Vec::new();
+            let mut visited = BTreeSet::new();
+            let mut pending = VecDeque::from([planned[index].instance]);
+            while let Some(id) = pending.pop_front() {
+                if !visited.insert(id) {
+                    continue;
+                }
+                let node = indices.get(&id).map(|&index| &planned[index]);
+                let handle = if let Some(node) = node {
+                    pending.extend(node.deps.iter().copied());
+                    &node.module
                 } else {
-                    publication.acquire_root(slot)
+                    let entry = self
+                        .committed
+                        .module_for_binding(id)
+                        .and_then(|slot| self.committed.module(slot))
+                        .ok_or_else(|| {
+                            LinkerError::context(LinkContextError::DependencyMissing { id })
+                        })?;
+                    pending.extend(entry.direct_deps().iter().map(|&slot| {
+                        self.committed
+                            .module(slot)
+                            .unwrap()
+                            .handle()
+                            .state()
+                            .instance_id()
+                    }));
+                    scope.extend(entry.retained().iter().cloned());
+                    entry.handle()
                 };
+                scope.push(handle.clone());
+                handle.state().with_effects(|bindings, pins| {
+                    pending.extend(bindings.iter().chain(pins).copied());
+                });
+            }
+            let mut retained = BTreeSet::new();
+            scope.retain(|module| retained.insert(module.state().instance_id()));
+            planned[index].retained = ModuleScope::from_admitted(domain, scope);
+        }
+
+        // All fallible admission is complete. Assign slots, resolve edges, then
+        // publish in input order so leases and duplicate-key ordering stay stable.
+        self.committed.reclaim_returned_slots();
+        let mut slots = BTreeMap::new();
+        for node in &planned {
+            slots.insert(node.instance, self.committed.alloc_module());
+        }
+        let resolve = |id: ModuleInstanceId| {
+            slots
+                .get(&id)
+                .copied()
+                .or_else(|| self.committed.module_for_binding(id))
+                .expect("validated dependency must have a module slot")
+        };
+        for node in &mut planned {
+            node.direct_deps = node.deps.iter().copied().map(&resolve).collect();
+        }
+        let pins = requested_pins.into_iter().map(resolve).collect::<Vec<_>>();
+        let mut leases = Vec::with_capacity(planned.len());
+        self.committed.publish(planned.len(), |publication| {
+            for node in planned {
+                let slot = slots[&node.instance];
+                let id = publication.insert(
+                    slot,
+                    StoredEntry::new(
+                        node.key.clone(),
+                        node.module,
+                        node.direct_deps,
+                        node.retained,
+                        1,
+                        node.meta,
+                    ),
+                );
                 publication.bind_key(node.key, slot);
                 leases.push(ModuleLease::new(id));
             }
@@ -569,6 +543,8 @@ mod tests {
     fn inserts_cycle() {
         let first = module("first");
         let second = module("second");
+        let first_weak = first.downgrade();
+        let second_weak = second.downgrade();
         let first_instance = first.state().instance_id();
         let second_instance = second.state().instance_id();
         let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
@@ -597,6 +573,8 @@ mod tests {
         assert!(context.release(first).unwrap().is_empty());
         assert_eq!(context.release(second).unwrap().len(), 2);
         assert!(context.is_empty());
+        assert!(first_weak.upgrade().is_none());
+        assert!(second_weak.upgrade().is_none());
     }
 
     #[test]
@@ -667,22 +645,27 @@ mod tests {
     }
 
     #[test]
-    fn reuses_exact_instance() {
-        let module = module("shared");
-        let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
+    fn duplicate_instance_rejects_entire_batch() {
+        let shared = module("shared");
+        let source = shared.source_id();
+        let mut context = LinkContext::<usize>::new(Domain::native(AddressSpaceId::PROCESS));
         let first = context
-            .insert(GraphModule::new("first", module.clone()))
+            .insert(GraphModule::with_meta("first", shared.clone(), 7))
             .unwrap();
-        let second = context
-            .insert_batch([GraphModule::new("second", module)])
-            .unwrap()
-            .into_vec()
-            .pop()
-            .unwrap();
-
-        assert_eq!(first.id(), second.id());
-        assert_eq!(context.module_id("second"), Some(first.id()));
-        assert!(context.release(first).unwrap().is_empty());
-        assert_eq!(context.release(second).unwrap().len(), 1);
+        let error = context
+            .insert_batch([
+                GraphModule::with_meta("new", module("new"), 9),
+                GraphModule::with_meta("alias", shared, 11),
+            ])
+            .unwrap_err();
+        let Error::Linker(LinkerError::Context { reason }) = error else {
+            panic!("unexpected insertion error: {error}");
+        };
+        assert!(matches!(*reason, LinkContextError::SourceOccupied { source: id } if id == source));
+        assert_eq!(context.module_id("new"), None);
+        assert_eq!(context.module_id("alias"), None);
+        assert_eq!(*context.meta(first.id()).unwrap(), 7);
+        assert_eq!(context.release(first).unwrap().len(), 1);
+        assert!(context.is_empty());
     }
 }

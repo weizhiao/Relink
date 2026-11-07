@@ -1,6 +1,6 @@
 //! libclang's C API, resolved from the library under test.
 use crate::symbols::Symbols;
-use elf_loader::{Loader, input::ElfFile};
+use elf_loader::{AddressSpaceId, Domain, Loader, input::ElfFile};
 use std::{
     ffi::{CString, c_char, c_int, c_uint, c_void},
     marker::PhantomData,
@@ -40,11 +40,12 @@ pub fn library_path() -> PathBuf {
         .collect();
     candidates.sort_by(|a, b| b.cmp(a));
     let loader = Loader::new();
+    let run = loader.run(Domain::native(AddressSpaceId::PROCESS));
     candidates.into_iter().find_map(|(_, path)| {
         let path = std::fs::canonicalize(path).ok()?;
         let file =
             ElfFile::from_path(elf_loader::input::Path::new(path.as_os_str().as_bytes())).ok()?;
-        loader.read_ehdr(&file).ok()?;
+        run.read_ehdr(&file).ok()?;
         Some(path)
     }).expect("cannot find native libclang in llvm-config --libdir; install the matching libclang shared library")
 }

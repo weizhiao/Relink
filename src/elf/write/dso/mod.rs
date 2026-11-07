@@ -1,9 +1,8 @@
 //! Minimal ELF dynamic-object writer.
 //!
-//! This module contains the small, no-std writer used to manufacture ELF
-//! shared objects that are meant to enter the regular dynamic-linking path.
-//! It intentionally focuses on ABI-visible metadata: program headers,
-//! `.dynamic`, `.dynsym`, `.dynstr`, `.hash`, and caller-provided text bytes.
+//! Builds shared objects from caller-provided text and exports, with program
+//! headers, `.dynamic`, `.dynsym`, `.dynstr`, and `.hash` metadata.
+//! Available in `no_std` builds.
 
 mod builder;
 mod hash;

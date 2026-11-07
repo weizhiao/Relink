@@ -1,166 +1,67 @@
 # Relink 内存模型
 
-`src/os/memory` 是 Relink 里“已经映射好的内存该怎么被访问”的抽象层。
-
-它不负责决定 ELF 段应该映射到哪里，也不直接实现 Linux `mmap`、Windows `VirtualAlloc` 这些系统调用。那些事情在 `src/os/traits.rs` 的 `Mmap` 后端和各个平台实现里完成。`src/os/memory` 更像是映射完成后的统一访问接口：给定一块内存，loader、relocator、symbol table parser 应该用同一套方式读、写、借用和改权限。
-
-下图展示了这套模型里几个核心类型的职责和调用关系：
-
-![Relink 内存模型的核心交互](../assets/memory-model.png)
-
-## 为什么需要这一层
-
-ELF loader 看起来是在处理文件格式，但真正麻烦的是“这些字节现在在哪”。
-
-同一份 ELF 数据可能来自几种地方：
-
-- 文件映射：直接把文件页映射进进程地址空间。
-- 内存输入：用户传进来的 `&[u8]`，loader 需要复制到自己的映射空间。
-- 预先存在的映射：动态链接器启动时，主程序可能已经被内核映射好了。
-- 自定义运行时：内核、嵌入式或 guest VM 可能没有普通的 host mmap。
-
-如果每个模块都直接拿裸指针和 `usize` 算地址，代码会很快变得脆弱。`src/os/memory` 的目标就是把这些差异收在一个地方，让上层只关心：
-
-- 这块区域的运行时地址是多少？
-- 我能不能从某个 offset 读一段 bytes？
-- 我能不能得到一个 host pointer 来复制数据？
-- 这段内存最后由谁释放？
-
-## 核心类型
-
-### `VmAddr` 和 `VmOffset`
-
-`VmAddr` 表示运行时虚拟地址，`VmOffset` 表示 ELF 镜像内部的虚拟偏移。
-
-这两个类型都是 `usize` 的轻量包装，但语义不同：
+[`memory` 模块](../../src/memory/mod.rs) 提供已映射内存的访问接口。
+[`Mmap` trait](../../src/os/traits.rs) 负责创建和填充映射，
+`RegionAccess` 负责读写、借用以及权限和内存建议操作。
 
 ```text
-VmAddr   = 进程/运行时里的地址，例如 0x7f00_1234_0000
-VmOffset = 镜像内部的偏移，例如 p_vaddr、section offset、symbol value
+Mmap                  创建和填充映射
+  → MappedRegion      共享 RegionAccess 后端的所有权
+    → ElfSegments     转换镜像地址，检查映射范围
+      → ImageMemory   向加载器提供基于地址的访问接口
 ```
 
-常见关系是：
+这套模型适用于文件映射、字节缓冲区复制、已映射的可执行文件和自定义地址空间。
 
-```text
-runtime address = load base + vm offset
-```
+## 地址与偏移
 
-所以代码里会写成：
+`VmAddr` 表示目标地址空间中的虚拟地址。`VmOffset` 表示镜像内的虚拟偏移，
+例如程序头的 `p_vaddr`，不表示文件偏移。两者都包装 `usize`，通过 `.get()` 取出数值。
 
-```rust,ignore
+```rust
+use elf_loader::memory::{VmAddr, VmOffset};
+
+let base = VmAddr::new(0x400000);
+let offset = VmOffset::new(0x1000);
 let addr = base + offset;
+assert_eq!(addr.get(), 0x401000);
 ```
 
-这样比到处传 `usize` 更不容易把“地址”和“偏移”混在一起。需要回到普通数值时再显式 `.get()`。
+加载基址用于重定位，满足 `运行时地址 = 加载基址 + 虚拟偏移`，不一定等于底层区域的起始地址。
+只有后端提供宿主可访问的内存时，目标地址才能作为宿主指针使用。
 
-### `RegionAccess`
+## 区域与所有权
 
-`RegionAccess` 是真正的访问能力接口。它描述“某块内存区域可以怎样被访问”。
+`RegionAccess` 描述一块连续内存区域，提供字节和类型化读写、清零、可选的宿主访问，
+以及权限和内存建议操作。调用未检查边界的方法前，调用方必须验证范围。
+借用切片时还必须保持映射有效，并防止同一范围在借用期间被修改。
+后端返回错误的能力不能替代这些安全要求。
 
-主要方法有：
+`MappedRegion<R>` 通过 `Arc<R>` 共享后端。克隆句柄会保留同一块区域，最后一个句柄释放时
+才销毁后端。内部访问方法使用相对区域起点的偏移，而非 ELF 虚拟偏移。
 
-- `addr()`：区域起始虚拟地址。
-- `len()`：区域长度。
-- `read_bytes()` / `write_bytes()`：读写字节。
-- `read_value()` / `write_value()`：读写一个 typed value。
-- `zero_bytes()`：清零一段范围。
-- `borrow_bytes()`：直接借出 host 可读 slice。
-- `host_ptr()`：拿到 host pointer，用于高效 copy。
-- `madvise()` / `mprotect()`：把操作转发给底层 mmap 后端。
+`HostRegion` 用于访问当前进程中的内存：
 
-这些方法多数是 `unsafe`，原因不是接口本身会随意越界，而是它们默认调用方已经做过范围检查。这样热路径不需要每一层重复检查边界。
+- `MappedRegion::local` 持有映射，最后一个句柄释放时通过后端的 `munmap` 释放原始分配范围。
+- `MappedRegion::local_alias` 借用映射。所有者必须保证映射仍然有效，并与所有别名协调访问和权限变更。
+- `MappedRegion::local_alias_no_unmap` 借用内存，但不附带控制映射的后端。
 
-换句话说：
+`AllocMmap` 保存原始分配指针和 Rust `Layout`，销毁时调用 `dealloc`。
+其裸 `munmap(addr, len)` 返回错误，因为仅凭地址和长度无法确定原始分配布局。
 
-```text
-ElfSegments 负责判断“这个地址在不在映射范围里”
-RegionAccess 负责执行“对这个 offset 做读写”
-```
+`MappedView<T>` 是内部使用的类型化借用视图。保存的 `'static` 切片不拥有映射；
+持有视图的镜像仍须维持内存生命周期并遵守借用约束。构造视图前需要检查长度和对齐。
+无法暴露宿主内存的后端可从 `borrow_bytes` 返回 `None`；调用方必须处理这种情况，
+不能假定所有解析路径都能直接借用内存。
 
-### `MappedRegion`
+## 镜像地址转换
 
-`MappedRegion<R>` 是对一块已映射内存的共享句柄。
+`ElfSegments` 保存加载基址、底层 `MappedRegion` 和相对镜像的 `MappedRange` 列表。
+底层区域虽然连续，镜像的有效映射范围可以不连续。访问时先检查请求范围是否属于镜像，
+再将地址换算为底层区域内的偏移。
 
-它内部用 `Arc<R>` 持有一个实现了 `RegionAccess` 的后端，所以 `MappedRegion` 可以廉价 clone。上层对象只需要保存 `MappedRegion`，不用关心底层到底是 host mmap、借用外部内存，还是未来某个 guest memory backend。
-
-它提供了一组薄封装：
-
-```rust,ignore
-region.read_bytes(offset, dst)
-region.write_value(offset, value)
-region.borrow_bytes(offset, len)
-region.mprotect(offset, len, prot)
-```
-
-`MappedRegion` 不负责做复杂地址换算。它只知道自己的 region offset。更高层的 `ElfSegments` 会把 ELF runtime address 转换成 region offset。
-
-### `HostRegion`
-
-`HostRegion` 是最常见的 `RegionAccess` 实现：它背后是一段 host 进程可以直接访问的内存。
-
-它保存 host pointer、可见长度，以及控制和释放内存所需的信息。所有权决定了内存的释放方式：
-
-- `MappedRegion::local(...)`：这个 region 拥有后端管理的映射，最后一个 clone 被 drop 时调用后端的 `munmap`。
-- `MappedRegion::local_alias(...)`：这个 region 只是借用/别名，drop 时不会释放内存。
-
-`AllocMmap` 按 `SpaceLayout.align` 和最小前缀 `offset % align` 分配内存。返回的 region 保存原始指针和 Rust `Layout`，最后一个 owner 被 drop 时直接调用 `dealloc`。它的裸 `Mmap::munmap(addr, len)` 返回错误，因为仅凭地址和长度无法确定原始分配布局。
-
-### `MappedView`
-
-`MappedView<T>` 是一个 typed borrowed view，内部就是一个 `&'static [T]`。
-
-它常用于解析 ELF 表，比如 dynamic table、program header、symbol table。流程通常是：
-
-```text
-MappedRegion::borrow_bytes(...)
-        |
-        v
-检查长度和对齐
-        |
-        v
-MappedView<T>
-```
-
-它的好处是解析器拿到的是 `&[T]`，不用一直手动处理裸指针。但它只在底层内存确实可以被 host 直接借用时可用。如果后端不能直接暴露 host slice，就可以让 `borrow_bytes()` 返回 `None`，上层再走 copy/解析路径。
-
-## 和 `ElfSegments` 的关系
-
-`src/os/memory` 只描述“一块 region 怎么访问”。ELF 镜像通常还需要另一个信息：这块 region 对应哪些 runtime 地址范围。
-
-这就是 `ElfSegments` 的职责。
-
-简单说：
-
-```text
-MappedRegion:
-    我有一块连续 backing memory。
-
-ElfSegments:
-    这块 backing memory 在 ELF runtime 地址空间里覆盖哪些范围。
-```
-
-`ElfSegments` 会保存：
-
-- `base: VmAddr`：加载基址。
-- `region: MappedRegion`：背后的实际内存。
-- `ranges`：这个镜像实际映射的 runtime range。
-
-当上层要读某个 runtime address 时，流程是：
-
-```text
-runtime address
-    |
-    v
-ElfSegments 检查它是否落在 mapped ranges 内
-    |
-    v
-转换成 region offset
-    |
-    v
-MappedRegion / RegionAccess 执行读写
-```
-
-这样设计后，loader 可以支持不连续的 ELF 映射范围，同时底层仍然可以用一块共享 backing region 来承载。
+`ImageMemory` 提供基于地址的范围查询、字节访问和可选的宿主指针。
+`ImageMemoryExt` 提供类型化访问方法，使 `ImageMemory` 本身仍可作为 trait object 使用。
 
 ## `Mmap` 后端和 memory 层怎么配合
 
@@ -183,7 +84,7 @@ MappedRegion / RegionAccess 执行读写
    relocation 完成后，把段权限改成最终权限。
 ```
 
-注意：copy path 不需要额外的 `map_copy_at`。它用可写权限调用 `create_space(..., SpaceInit::Zeroed)`，然后直接把 bytes 复制到已清零、host-accessible 的空间中。这样内存加载路径更短，也避免每个 segment 多一次系统调用。`SpaceInit::File { fd, offset }` 则可以用私有文件映射初始化空间，权限由调用方的 `prot` 指定，不再固定为只读。
+注意：copy path 不需要额外的 `map_copy_at`。它用可写权限调用 `create_space(..., SpaceInit::Zeroed)`，然后直接把 bytes 复制到已清零、host-accessible 的空间中。这样内存加载路径更短，也避免每个 segment 多一次系统调用。`SpaceInit::File { fd, offset }` 则可以用私有文件映射初始化空间，权限由调用方的 `prot` 指定，不限定为只读。
 
 `SpaceLayout { addr, len, align, offset }` 单独描述地址布局，与初始内容无关。`addr` 保留各后端原有的地址选择语义：原生后端将它作为地址提示，allocator 和 fixed 后端用它选择调用方提供的存储。后端返回长度为 `len` 的 region，其起始地址满足 `start % align == offset % align`。`len` 必须非零且为后端页大小的整数倍。`align` 必须是至少等于后端页大小的二次幂，`offset` 必须按页对齐。这里的 offset 用于地址对齐，文件位置则由 `SpaceInit::File` 单独指定。加载 program segments 时，loader 使用 `min_vaddr` 作为布局 offset，从而使加载基址 `image_start - min_vaddr` 满足 ELF 的对齐要求。超过一页的对齐由后端处理。
 
@@ -193,7 +94,7 @@ MappedRegion / RegionAccess 执行读写
 
 ## unsafe 边界
 
-这一层有不少 `unsafe`，但它们各自承担的风险不同：
+各层的 `unsafe` 操作有不同的约束：
 
 - `Mmap` 后端的 `unsafe`：会改进程虚拟地址空间，调用错了可能破坏映射。
 - `RegionAccess` 的 `unsafe`：默认调用方已经保证 offset 和 len 在 region 内。
@@ -230,16 +131,3 @@ MappedRegion / RegionAccess 执行读写
 - 能直接借出 host bytes，就实现 `borrow_bytes`。
 - 能直接拿到 host pointer，就实现 `host_ptr`。
 - 不能直接暴露，就返回 `None`，让上层选择别的路径。
-
-## 小结
-
-`src/os/memory` 的设计核心是把“内存在哪里”和“怎么访问它”分开：
-
-- `Mmap`：负责创建和填充地址空间。
-- `MappedRegion`：负责保存一块已映射区域的共享句柄。
-- `RegionAccess`：负责对这块区域执行读写、清零、借用和权限操作。
-- `HostRegion`：普通 host mmap 的具体实现。
-- `VmAddr` / `VmOffset`：让地址和偏移的语义在类型上分开。
-- `ElfSegments`：把 ELF runtime 地址映射到 `MappedRegion` 的 region offset。
-
-这样上层 loader 可以用统一方式处理文件映射、内存加载、预映射镜像和自定义 runtime，而不用把平台细节散落在 ELF 解析和重定位代码里。

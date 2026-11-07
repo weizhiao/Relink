@@ -108,10 +108,9 @@ struct StagedSource {
     ready_index: Option<usize>,
 }
 
-#[derive(Default)]
 struct PendingSources {
     entries: BTreeMap<ModuleSourceId, StagedSource>,
-    returns: Option<ReservationReturns>,
+    returns: ReservationReturns,
 }
 
 impl PendingSources {
@@ -120,11 +119,12 @@ impl PendingSources {
         committed: &mut CommittedStorage<Meta, Arch>,
         source: ModuleSourceId,
     ) -> (ModuleSlot, u32) {
+        if self.entries.is_empty() {
+            committed.reclaim_returned_slots();
+        }
         let Entry::Vacant(entry) = self.entries.entry(source) else {
             panic!("pending module sources must be unique");
         };
-        self.returns
-            .get_or_insert_with(|| committed.reserve_returns());
         let slot = committed.alloc_module();
         let generation = committed.generation(slot);
         entry.insert(StagedSource {
@@ -136,16 +136,16 @@ impl PendingSources {
     }
 
     fn disarm(&mut self) {
-        self.returns = None;
+        self.entries.clear();
     }
 }
 
 impl Drop for PendingSources {
     fn drop(&mut self) {
-        if let Some(returns) = &self.returns {
+        if !self.entries.is_empty() {
             // Transactions may outlive their context or be dropped elsewhere.
             // Return only identities; the next allocation batch reclaims them.
-            returns.lock().extend(
+            self.returns.lock().extend(
                 self.entries
                     .values()
                     .map(|source| (source.slot, source.generation)),
@@ -172,7 +172,7 @@ where
     Arch: RelocationArch,
 {
     #[inline]
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(returns: ReservationReturns) -> Self {
         Self {
             dynamics: BTreeMap::new(),
             modules: BTreeMap::new(),
@@ -180,7 +180,10 @@ where
             guards: BTreeMap::new(),
             group_order: Vec::new(),
             bindings: BTreeMap::new(),
-            sources: PendingSources::default(),
+            sources: PendingSources {
+                entries: BTreeMap::new(),
+                returns,
+            },
             pins: Vec::new(),
         }
     }

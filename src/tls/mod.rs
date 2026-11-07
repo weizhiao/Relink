@@ -7,6 +7,8 @@
 //! [`TlsModule`] is borrowed metadata; [`TlsTemplate`] owns initialization bytes
 //! independently of the ELF image.
 //!
+//! ## Platform Support and Thread Cleanup
+//!
 //! All default-resolver registrations require `std` on Linux/Android, including
 //! static TLS and custom providers. Other environments must supply a [`TlsResolver`]
 //! with their own thread lifecycle. Static and external addresses are cached without
@@ -14,10 +16,14 @@
 //! On Linux/Android, managed blocks are reclaimed in the second pthread destructor
 //! round; resolving TLS through the default resolver after reclamation is unsupported.
 //!
+//! ## Reentrant Access
+//!
 //! Recursive creation of managed dynamic TLS from allocator callbacks is not
 //! supported. Existing DTV updates temporarily make managed queries unavailable
 //! (`None` or an error); ELF TLS access cannot report this failure and must not
 //! be used from such callbacks.
+//!
+//! ## Pointer Lifetimes
 //!
 //! [`DefaultTlsResolver::get_ptr_if_allocated`] does not allocate a TLS block.
 //! With `std`, the lookup may initialize standard-library thread-local caches.

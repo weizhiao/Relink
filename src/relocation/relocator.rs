@@ -39,27 +39,12 @@ use super::BindingMode;
 ///     Ok(())
 /// }
 /// ```
+#[derive(Clone, Copy)]
 pub struct Relocator<Binder = ()> {
     pub(super) lazy_binder: Binder,
     pub(super) run_init: bool,
     pub(super) binding: BindingMode,
 }
-
-impl<Binder> Clone for Relocator<Binder>
-where
-    Binder: Clone,
-{
-    #[inline]
-    fn clone(&self) -> Self {
-        Self {
-            lazy_binder: self.lazy_binder.clone(),
-            run_init: self.run_init,
-            binding: self.binding,
-        }
-    }
-}
-
-impl<Binder> Copy for Relocator<Binder> where Binder: Copy {}
 
 impl Relocator<()> {
     /// Creates a new empty relocation configuration.

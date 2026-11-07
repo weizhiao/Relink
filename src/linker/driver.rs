@@ -157,11 +157,9 @@ impl Linker {
         }
     }
 
-    /// Switch the linker's relocation domain before a loader is attached.
+    /// Selects the target architecture before attaching a loader.
     ///
-    /// This mirrors [`Loader::with_arch`] for the dependency-linking front-end:
-    /// all modules committed through the resulting [`crate::LinkContext`] use
-    /// `NewArch`.
+    /// The loader and [`crate::LinkContext`] must use the same architecture.
     #[inline]
     #[allow(clippy::type_complexity)]
     pub const fn with_arch<NewArch>(self) -> Linker<NewArch, Loader<(), NewArch>, (), ()>

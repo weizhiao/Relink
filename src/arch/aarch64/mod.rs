@@ -1,7 +1,4 @@
-//! AArch64 architecture-specific ELF relocation and dynamic linking support.
-//!
-//! This module provides AArch64 specific implementations for ELF relocation,
-//! dynamic linking, and procedure linkage table (PLT) handling.
+//! AArch64 ELF relocation, TLS, and lazy PLT binding.
 
 // `lazy` and `tls` contain naked assembly that is only valid when the host
 // CPU matches this module's architecture. Other architectures only need the

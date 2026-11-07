@@ -1,8 +1,7 @@
 //! Architecture-specific definitions and relocation logic.
 //!
-//! This module contains target-specific code for various CPU architectures
-//! supported by the ELF loader, including relocation handlers, PLT entry definitions,
-//! and instruction-specific fixups.
+//! [`NativeArch`] selects the compilation target. Use [`crate::Loader::with_arch`]
+//! to select another architecture for ELF validation and relocation.
 // All architecture submodules are declared unconditionally so that their
 // pure-data items (relocation type numbers, architecture markers, ...) are reachable
 // from any host. Platform-specific code inside each submodule (naked
