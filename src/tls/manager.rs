@@ -1,4 +1,4 @@
-use super::dtv::{ensure_thread_storage, lookup_cached, lookup_dtv, with_dtv};
+use super::dtv::{ensure_thread_storage, lookup_dtv, with_dtv};
 use crate::{
     Result, TlsError,
     arch::{NativeArch, get_thread_pointer},
@@ -244,7 +244,7 @@ cfg_if::cfg_if! {
     } else if #[cfg(feature = "std")] {
         extern "C" fn tls_get_addr(index: *const TlsIndex) -> *mut u8 {
             let ti = unsafe { &*index };
-            if let Some(base) = lookup_cached(ti.ti_module) {
+            if let Some(base) = super::dtv::lookup_cached(ti.ti_module) {
                 let offset = ti.ti_offset.wrapping_add(NativeArch::TLS_DTV_OFFSET);
                 return base.as_ptr().wrapping_add(offset);
             }

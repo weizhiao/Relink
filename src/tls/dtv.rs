@@ -507,6 +507,7 @@ cfg_if::cfg_if! {
 
         pub(super) use pthread::{ensure_thread_storage, lookup_cached, lookup_dtv, with_dtv};
     } else {
+        #[cfg(all(feature = "std", not(all(windows, target_arch = "x86_64"))))]
         pub(super) fn lookup_cached(_: TlsModuleId) -> Option<NonNull<u8>> {
             None
         }

@@ -146,8 +146,8 @@ huge pages. Regenerate baselines from versions where `with_thp` affected files o
 
 ### THP figure
 
-The README figure uses measurements from commit `a451175`,
-collected on 2026-11-03: Ryzen 9 7945HX, Linux 7.0.11, glibc 2.43, Rust 1.96.0,
+The README figure uses measurements from commit `e5a5b92`,
+collected on 2026-11-07: Ryzen 9 7945HX, Linux 7.0.11, glibc 2.43, Rust 1.96.0,
 CPU 2, system THP `always`, defrag `madvise`. The CPU governor remained `powersave`
 with `balance_performance`; no system settings or caches were reset.
 Libclang/libLLVM 21.1.8 process simdjson 3.12.3. Each backend/workload received

@@ -35,7 +35,7 @@ Relink 是用 Rust 编写的 ELF 加载器与运行时链接器，面向插件�
 
 ## 基准测试
 
-在本次 10 个系统库与 `libloading` 0.9.0（glibc）的对照中，Relink **加载耗时减少约 4–32%**，**符号命中耗时约为 1/3**。
+在本次 10 个系统库与 `libloading` 0.9.0（glibc）的对照中，Relink 在 **9 个库上的加载耗时减少约 6–33%**，PCRE2 约慢 0.3%；全部 10 个库的**符号命中耗时约为 1/3**。
 图中为平均耗时和 95% 置信区间，越低越好。
 
 **加载与卸载 · µs**
@@ -52,18 +52,12 @@ Relink 是用 Rust 编写的 ELF 加载器与运行时链接器，面向插件�
 
 符号查找比较的是公开 API：Relink 搜索根库导出，`dlsym` 还可能搜索依赖；未命中包含各自的错误处理成本。
 
-| 测试配置 | 值 |
-| --- | --- |
-| 日期 / commit | 2026-10-29 · `ed37e60` |
-| 环境 | Ryzen 9 7945HX · Linux 7.0.11-arch1-1 x86_64 · glibc 2.43 · Rust 1.96.0 |
-| 采样 | 固定 CPU 2；每项预热 1 秒、测量 2 秒、30 个样本；热文件缓存 |
-
 复现：`taskset -c 2 bash ci/bench.sh`。依赖与测量口径见[基准指南](benches/README.md)。
 
 **透明大页优化**
 
 在本次 Clang / LLVM 编译负载测试中，启用 `ThpPolicy::Collapse` 后，
-**执行耗时减少 1.1–5.4%**，两组的**指令 TLB miss 均减少约 99.95%**。
+**执行耗时减少 2.2–4.7%**，两组的**指令 TLB miss 均减少约 99.95%**。
 
 ![Relink 启用 THP 前后的执行耗时和指令 TLB miss 对比](benches/figures/thp-execution-dark.svg#gh-dark-mode-only)
 ![Relink 启用 THP 前后的执行耗时和指令 TLB miss 对比](benches/figures/thp-execution.svg#gh-light-mode-only)
@@ -71,14 +65,18 @@ Relink 是用 Rust 编写的 ELF 加载器与运行时链接器，面向插件�
 执行耗时展示均值和 95% 置信区间，不含加载、大页合并、准备与校验。
 iTLB 为整进程用户态计数，包含这些阶段；图中为两次计数的均值，越低越好。
 
+以上图表使用同一 commit 和测试环境。
+
 | 测试配置 | 值 |
 | --- | --- |
-| 日期 / commit | 2026-11-03 · `a451175` |
+| 日期 / commit | 2026-11-07 · `e5a5b92` |
 | 环境 | Ryzen 9 7945HX · Linux 7.0.11-arch1-1 x86_64 · glibc 2.43 · Rust 1.96.0 |
-| 负载 | libclang / libLLVM 21.1.8 · simdjson 3.12.3；Clang 解析与类型检查、LLVM O3 优化与代码生成 |
-| THP | 系统策略 `always`；对照默认 Relink 与 `ThpPolicy::Collapse` |
-| 计时采样 | 固定 CPU 2；热文件缓存；Criterion 预热 1 秒、目标测量 5 秒；Clang 30 个样本、LLVM 10 个样本 |
-| TLB 采样 | `perf stat`；每项 2 个独立进程，每进程固定 3 次解析或编译（含前后校验） |
+| 共同设置 | 固定 CPU 2；热文件缓存；Criterion 0.8.2；预热 1 秒 |
+| 加载 / 查找采样 | 每项目标测量 2 秒、30 个样本；`libloading` 0.9.0 |
+| THP 负载 | libclang / libLLVM 21.1.8 · simdjson 3.12.3；Clang 解析与类型检查、LLVM O3 优化与代码生成 |
+| THP 策略 | 系统 `always`；对照默认 Relink 与 `ThpPolicy::Collapse` |
+| THP 计时 | 目标测量 5 秒；Clang 30 个样本、LLVM 10 个样本 |
+| THP TLB 采样 | `perf stat`；每项 2 个独立进程，每进程固定 3 次解析或编译（含前后校验） |
 
 复现步骤、内存开销与测量口径见[基准指南](benches/README.md#thp-figure)。
 

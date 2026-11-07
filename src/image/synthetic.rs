@@ -456,16 +456,46 @@ mod tests {
             tag: usize,
         }
 
-        let tls = crate::tls::DefaultTlsResolver::new()
+        use crate::tls::{TlsBinding, TlsInfo, TlsModuleId, TlsRequest, TlsTemplate};
+
+        #[derive(Clone)]
+        struct MetadataResolver;
+
+        impl TlsResolver<NativeArch> for MetadataResolver {
+            fn register(&self, _: TlsInfo, request: TlsRequest) -> Result<TlsRegistration> {
+                let TlsRequest::Static(offset) = request else {
+                    unreachable!("this fixture only registers static metadata")
+                };
+                let entry = self.bind_tls_get_addr()?;
+                // SAFETY: This isolated metadata-only runtime never resolves storage.
+                // Its sole registration has no resources to release.
+                Ok(unsafe {
+                    TlsRegistration::new(
+                        TlsModule::new(TlsBinding::new(TlsModuleId::new(1), offset), entry),
+                        || {},
+                    )
+                })
+            }
+
+            fn publish(&self, _: TlsTemplate, _: TlsModuleId) -> Result<()> {
+                unreachable!("this fixture never publishes TLS storage")
+            }
+
+            fn bind_tls_get_addr(&self) -> Result<VmAddr> {
+                Ok(VmAddr::new(0x1000))
+            }
+        }
+
+        let tls = MetadataResolver
             .register(
-                crate::tls::TlsInfo::default(),
-                crate::tls::TlsRequest::Static(Some(TlsTpOffset::new(-0x80))),
+                TlsInfo::default(),
+                TlsRequest::Static(Some(TlsTpOffset::new(-0x80))),
             )
             .unwrap();
         let binding = tls.module().binding();
         let mut module = SyntheticModule::<NativeArch>::empty(
             &Domain::native(AddressSpaceId::PROCESS)
-                .with_tls(crate::tls::DefaultTlsResolver::new())
+                .with_tls(MetadataResolver)
                 .unwrap(),
             "__tls",
         )

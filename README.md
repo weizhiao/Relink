@@ -35,8 +35,9 @@ Relink is a Rust ELF loader and runtime linker for plugins, JITs, and custom run
 
 ## Benchmarks
 
-Across the 10 system libraries in this run, Relink used **4–32% less load time** and
-**about one-third the symbol-hit time** compared with `libloading` 0.9.0 (glibc).
+Across the 10 system libraries in this run, Relink used **6–33% less load time in
+9 libraries**, with PCRE2 about 0.3% slower, compared with `libloading` 0.9.0 (glibc).
+Symbol-hit time was **about one-third** of `libloading` across all 10 libraries.
 Figures show means and 95% confidence intervals; lower is better.
 
 **Load & teardown · µs**
@@ -54,19 +55,13 @@ Teardown times are similar overall. Context creation/destruction and host import
 Symbol lookup compares public APIs: Relink searches root exports, while `dlsym` may also
 search dependencies. Misses include each API's error handling.
 
-| Configuration | Value |
-| --- | --- |
-| Date / commit | 2026-10-29 · `ed37e60` |
-| Environment | Ryzen 9 7945HX · Linux 7.0.11-arch1-1 x86_64 · glibc 2.43 · Rust 1.96.0 |
-| Sampling | Pinned to CPU 2; 1 s warmup, 2 s measurement, 30 samples per case; warm file cache |
-
 Reproduce with `taskset -c 2 bash ci/bench.sh`. See the [benchmark guide](benches/README.md)
 for dependencies and measurement scope.
 
 **Transparent Huge Page Optimization**
 
 In these Clang / LLVM compilation workloads, enabling `ThpPolicy::Collapse`
-reduced **execution time by 1.1–5.4%** and **instruction TLB misses by about 99.95% in both workloads**.
+reduced **execution time by 2.2–4.7%** and **instruction TLB misses by about 99.95% in both workloads**.
 
 ![Relink execution time and instruction TLB misses with and without THP](benches/figures/thp-execution-dark.svg#gh-dark-mode-only)
 ![Relink execution time and instruction TLB misses with and without THP](benches/figures/thp-execution.svg#gh-light-mode-only)
@@ -75,14 +70,18 @@ Execution shows means and 95% confidence intervals, excluding loading, page
 collapse, setup and validation. iTLB counts cover the whole user-mode worker,
 including those stages, and show means of two runs. Lower is better.
 
+All figures above use the same commit and environment.
+
 | Configuration | Value |
 | --- | --- |
-| Date / commit | 2026-11-03 · `a451175` |
+| Date / commit | 2026-11-07 · `e5a5b92` |
 | Environment | Ryzen 9 7945HX · Linux 7.0.11-arch1-1 x86_64 · glibc 2.43 · Rust 1.96.0 |
-| Workloads | libclang / libLLVM 21.1.8 · simdjson 3.12.3; Clang parsing/type-checking, LLVM O3 optimization/codegen |
-| THP | System policy `always`; default Relink versus `ThpPolicy::Collapse` |
-| Timing | Pinned to CPU 2; warm file cache; Criterion 1 s warmup, 5 s target measurement; 30 Clang / 10 LLVM samples |
-| TLB sampling | `perf stat`; 2 fresh processes per case, exactly 3 parses or compilations per process (including validation before/after) |
+| Shared settings | CPU 2; warm file cache; Criterion 0.8.2; 1 s warmup |
+| Load / lookup sampling | 2 s target measurement, 30 samples per case; `libloading` 0.9.0 |
+| THP workloads | libclang / libLLVM 21.1.8 · simdjson 3.12.3; Clang parsing/type-checking, LLVM O3 optimization/codegen |
+| THP policy | System `always`; default Relink versus `ThpPolicy::Collapse` |
+| THP timing | 5 s target measurement; 30 Clang / 10 LLVM samples |
+| THP TLB sampling | `perf stat`; 2 fresh processes per case, exactly 3 parses or compilations per process (including validation before/after) |
 
 See the [benchmark guide](benches/README.md#thp-figure) for reproduction, memory costs and measurement scope.
 
