@@ -19,8 +19,9 @@ use core::ptr::NonNull;
 ///
 /// # Safety
 /// Returned pointers must address the registered block in the calling thread and
-/// remain valid until module or thread teardown. Retain the runtime resources
-/// needed by each operation and support concurrent calls from different threads.
+/// remain valid until module or thread teardown. Resolvers may cache that block's
+/// base for this lifetime without calling the provider again. Retain the runtime
+/// resources needed by each operation and support concurrent calls from different threads.
 /// Host storage must retain its original module and must not be freed or
 /// reinitialized by the importing runtime. Publish managed templates before
 /// exposing their storage. Do not retain the image owning this registration:
@@ -38,14 +39,14 @@ pub unsafe trait TlsProvider: Send + Sync + 'static {
         Err(TlsError::ModuleMismatch.into())
     }
 
-    /// Resolves a logical byte offset, allocating current-thread storage if needed.
-    /// The implementation handles any ABI-specific DTV bias.
+    /// Returns the current thread's block base, allocating storage if needed.
+    /// The returned base has no ABI-specific DTV bias; providers translate it internally.
     ///
     /// # Safety
     /// `context` must be the metadata assigned when this provider was registered.
     /// The entry may have since been removed; retained provider resources must
     /// remain usable, or the operation must report unavailable storage.
-    unsafe fn resolve(&self, context: &TlsContext, offset: usize) -> Result<NonNull<u8>>;
+    unsafe fn get_or_init(&self, context: &TlsContext) -> Result<NonNull<u8>>;
 
     /// Queries an existing block without allocating a TLS block.
     /// The storage backend may initialize thread-local lookup bookkeeping.
@@ -55,9 +56,7 @@ pub unsafe trait TlsProvider: Send + Sync + 'static {
     /// `context` must be the metadata assigned when this provider was registered.
     /// The entry may have since been removed; retained provider resources must
     /// remain usable, or the operation must report unavailable storage.
-    unsafe fn get(&self, _context: &TlsContext) -> Option<NonNull<u8>> {
-        None
-    }
+    unsafe fn get(&self, context: &TlsContext) -> Option<NonNull<u8>>;
 }
 
 /// Registers TLS modules and supplies their runtime entry points.

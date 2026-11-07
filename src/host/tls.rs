@@ -53,10 +53,10 @@ impl HostTls {
 // SAFETY: the retained handle pins glibc's registration. glibc supplies each
 // thread's block; we translate IDs and the architecture's DTV bias at the boundary.
 unsafe impl TlsProvider for HostTls {
-    unsafe fn resolve(&self, _context: &TlsContext, offset: usize) -> Result<NonNull<u8>> {
+    unsafe fn get_or_init(&self, _context: &TlsContext) -> Result<NonNull<u8>> {
         let index = TlsIndex {
             ti_module: self.mod_id,
-            ti_offset: offset.wrapping_sub(NativeArch::TLS_DTV_OFFSET),
+            ti_offset: 0usize.wrapping_sub(NativeArch::TLS_DTV_OFFSET),
         };
         NonNull::new(unsafe { (self.get_addr)(&index) }).ok_or_else(|| {
             crate::TlsError::InvalidModuleId {

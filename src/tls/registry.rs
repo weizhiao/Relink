@@ -79,10 +79,10 @@ impl TlsRegistryEntry {
         unsafe { self.owner.0.publish(&self.context, source) }
     }
 
-    /// Resolves a logical offset in the current thread's block.
-    pub fn resolve(&self, offset: usize) -> Result<NonNull<u8>> {
+    /// Returns the current thread's block base, allocating storage if needed.
+    pub fn get_or_init(&self) -> Result<NonNull<u8>> {
         // SAFETY: Registry construction binds this context to this provider.
-        unsafe { self.owner.0.resolve(&self.context, offset) }
+        unsafe { self.owner.0.get_or_init(&self.context) }
     }
 
     /// Queries the current thread's block without allocating TLS.

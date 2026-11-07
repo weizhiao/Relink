@@ -171,8 +171,8 @@ With `std`, the default resolver uses a heap-allocated DTV owned by a pthread ke
 on Linux/Android; Rust thread-local storage only caches its pointer. The DTV is
 reclaimed in the second pthread destructor round, keeping TLS blocks available
 during first-round cleanup. Arbitrarily rearmed foreign destructors may run later.
-Other targets and `no_std` builds require a custom resolver/provider for dynamic
-TLS. Static TLS does not require this thread-storage backend.
+All default-resolver registrations require this backend, including static TLS and
+custom providers. Other targets and `no_std` builds require a custom resolver.
 For `use-syscall`, disable default features and do not enable `std`.
 
 ## Contributing

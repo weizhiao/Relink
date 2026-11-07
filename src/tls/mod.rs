@@ -7,11 +7,12 @@
 //! [`TlsModule`] is borrowed metadata; [`TlsTemplate`] owns initialization bytes
 //! independently of the ELF image.
 //!
-//! Default managed dynamic TLS requires `std` on Linux/Android.
-//! Other environments must supply a [`TlsResolver`] with their own thread lifecycle.
-//! Static TLS and custom providers do not require the default thread storage.
+//! All default-resolver registrations require `std` on Linux/Android, including
+//! static TLS and custom providers. Other environments must supply a [`TlsResolver`]
+//! with their own thread lifecycle. Static and external addresses are cached without
+//! taking ownership of their blocks.
 //! On Linux/Android, managed blocks are reclaimed in the second pthread destructor
-//! round; accessing managed TLS after that reclamation is unsupported.
+//! round; resolving TLS through the default resolver after reclamation is unsupported.
 //!
 //! Recursive creation of managed dynamic TLS from allocator callbacks is not
 //! supported. Existing DTV updates temporarily make managed queries unavailable
