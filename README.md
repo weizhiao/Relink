@@ -70,20 +70,10 @@ Execution shows means and 95% confidence intervals, excluding loading, page
 collapse, setup and validation. iTLB counts cover the whole user-mode worker,
 including those stages, and show means of two runs. Lower is better.
 
-All figures above use the same commit and environment.
-
-| Configuration | Value |
-| --- | --- |
-| Date / commit | 2026-11-07 · `e5a5b92` |
-| Environment | Ryzen 9 7945HX · Linux 7.0.11-arch1-1 x86_64 · glibc 2.43 · Rust 1.96.0 |
-| Shared settings | CPU 2; warm file cache; Criterion 0.8.2; 1 s warmup |
-| Load / lookup sampling | 2 s target measurement, 30 samples per case; `libloading` 0.9.0 |
-| THP workloads | libclang / libLLVM 21.1.8 · simdjson 3.12.3; Clang parsing/type-checking, LLVM O3 optimization/codegen |
-| THP policy | System `always`; default Relink versus `ThpPolicy::Collapse` |
-| THP timing | 5 s target measurement; 30 Clang / 10 LLVM samples |
-| THP TLB sampling | `perf stat`; 2 fresh processes per case, exactly 3 parses or compilations per process (including validation before/after) |
-
-See the [benchmark guide](https://github.com/weizhiao/Relink/blob/main/benches/README.md#thp-figure) for reproduction, memory costs and measurement scope.
+Tested on 2026-11-07 at `e5a5b92`: Ryzen 9 7945HX, Linux 7.0.11 x86_64,
+glibc 2.43 and Rust 1.96.0; pinned to CPU 2 with a warm file cache.
+See the [benchmark guide](https://github.com/weizhiao/Relink/blob/main/benches/README.md#thp-figure)
+for sampling settings, THP configuration, memory costs and reproduction steps.
 
 ## Quick Start
 

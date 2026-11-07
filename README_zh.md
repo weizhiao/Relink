@@ -65,20 +65,9 @@ Relink 是用 Rust 编写的 ELF 加载器与运行时链接器，面向插件�
 执行耗时展示均值和 95% 置信区间，不含加载、大页合并、准备与校验。
 iTLB 为整进程用户态计数，包含这些阶段；图中为两次计数的均值，越低越好。
 
-以上图表使用同一 commit 和测试环境。
-
-| 测试配置 | 值 |
-| --- | --- |
-| 日期 / commit | 2026-11-07 · `e5a5b92` |
-| 环境 | Ryzen 9 7945HX · Linux 7.0.11-arch1-1 x86_64 · glibc 2.43 · Rust 1.96.0 |
-| 共同设置 | 固定 CPU 2；热文件缓存；Criterion 0.8.2；预热 1 秒 |
-| 加载 / 查找采样 | 每项目标测量 2 秒、30 个样本；`libloading` 0.9.0 |
-| THP 负载 | libclang / libLLVM 21.1.8 · simdjson 3.12.3；Clang 解析与类型检查、LLVM O3 优化与代码生成 |
-| THP 策略 | 系统 `always`；对照默认 Relink 与 `ThpPolicy::Collapse` |
-| THP 计时 | 目标测量 5 秒；Clang 30 个样本、LLVM 10 个样本 |
-| THP TLB 采样 | `perf stat`；每项 2 个独立进程，每进程固定 3 次解析或编译（含前后校验） |
-
-复现步骤、内存开销与测量口径见[基准指南](https://github.com/weizhiao/Relink/blob/main/benches/README.md#thp-figure)。
+测试于 2026-11-07，commit `e5a5b92`；环境为 Ryzen 9 7945HX、Linux 7.0.11 x86_64、
+glibc 2.43、Rust 1.96.0，固定 CPU 2，使用热文件缓存。
+采样设置、THP 配置、内存开销与复现步骤见[基准指南](https://github.com/weizhiao/Relink/blob/main/benches/README.md#thp-figure)。
 
 ## 快速开始
 
