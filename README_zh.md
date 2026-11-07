@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> | <a href="README_zh.md">简体中文</a>
+  <a href="https://github.com/weizhiao/Relink/blob/main/README.md">English</a> | <a href="https://github.com/weizhiao/Relink/blob/main/README_zh.md">简体中文</a>
 </p>
 
 <p align="center">
@@ -24,7 +24,7 @@
 
 Relink 是用 Rust 编写的 ELF 加载器与运行时链接器，面向插件、JIT 和自定义运行时。你可以自主控制依赖解析、符号绑定、内存布局与加载生命周期。
 
-[快速开始](#快速开始) · [性能数据](#基准测试) · [平台支持](#平台支持) · [运行示例](examples/README.md) · [API 文档](https://docs.rs/elf_loader)
+[快速开始](#快速开始) · [性能数据](#基准测试) · [平台支持](#平台支持) · [运行示例](https://github.com/weizhiao/Relink/blob/main/examples/README.md) · [API 文档](https://docs.rs/elf_loader)
 
 ## 核心能力
 
@@ -40,27 +40,27 @@ Relink 是用 Rust 编写的 ELF 加载器与运行时链接器，面向插件�
 
 **加载与卸载 · µs**
 
-![Relink 与 libloading 的加载和卸载耗时对比](benches/figures/load-teardown-dark.svg#gh-dark-mode-only)
-![Relink 与 libloading 的加载和卸载耗时对比](benches/figures/load-teardown.svg#gh-light-mode-only)
+![Relink 与 libloading 的加载和卸载耗时对比](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/load-teardown-dark.svg#gh-dark-mode-only)
+![Relink 与 libloading 的加载和卸载耗时对比](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/load-teardown.svg#gh-light-mode-only)
 
 卸载耗时整体相近。不计入 context 创建、销毁及宿主导入。
 
 **符号查找 · ns**
 
-![Relink 与 libloading 的符号命中和未命中耗时对比](benches/figures/symbol-lookup-dark.svg#gh-dark-mode-only)
-![Relink 与 libloading 的符号命中和未命中耗时对比](benches/figures/symbol-lookup.svg#gh-light-mode-only)
+![Relink 与 libloading 的符号命中和未命中耗时对比](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/symbol-lookup-dark.svg#gh-dark-mode-only)
+![Relink 与 libloading 的符号命中和未命中耗时对比](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/symbol-lookup.svg#gh-light-mode-only)
 
 符号查找比较的是公开 API：Relink 搜索根库导出，`dlsym` 还可能搜索依赖；未命中包含各自的错误处理成本。
 
-复现：`taskset -c 2 bash ci/bench.sh`。依赖与测量口径见[基准指南](benches/README.md)。
+复现：`taskset -c 2 bash ci/bench.sh`。依赖与测量口径见[基准指南](https://github.com/weizhiao/Relink/blob/main/benches/README.md)。
 
 **透明大页优化**
 
 在本次 Clang / LLVM 编译负载测试中，启用 `ThpPolicy::Collapse` 后，
 **执行耗时减少 2.2–4.7%**，两组的**指令 TLB miss 均减少约 99.95%**。
 
-![Relink 启用 THP 前后的执行耗时和指令 TLB miss 对比](benches/figures/thp-execution-dark.svg#gh-dark-mode-only)
-![Relink 启用 THP 前后的执行耗时和指令 TLB miss 对比](benches/figures/thp-execution.svg#gh-light-mode-only)
+![Relink 启用 THP 前后的执行耗时和指令 TLB miss 对比](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/thp-execution-dark.svg#gh-dark-mode-only)
+![Relink 启用 THP 前后的执行耗时和指令 TLB miss 对比](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/thp-execution.svg#gh-light-mode-only)
 
 执行耗时展示均值和 95% 置信区间，不含加载、大页合并、准备与校验。
 iTLB 为整进程用户态计数，包含这些阶段；图中为两次计数的均值，越低越好。
@@ -78,16 +78,16 @@ iTLB 为整进程用户态计数，包含这些阶段；图中为两次计数的
 | THP 计时 | 目标测量 5 秒；Clang 30 个样本、LLVM 10 个样本 |
 | THP TLB 采样 | `perf stat`；每项 2 个独立进程，每进程固定 3 次解析或编译（含前后校验） |
 
-复现步骤、内存开销与测量口径见[基准指南](benches/README.md#thp-figure)。
+复现步骤、内存开销与测量口径见[基准指南](https://github.com/weizhiao/Relink/blob/main/benches/README.md#thp-figure)。
 
 ## 快速开始
 
 ```toml
 [dependencies]
-elf_loader = "0.18.0"
+elf_loader = "0.19.0"
 ```
 
-下面的例子加载动态库、调用函数并释放模块。先按[示例指南](examples/README.md#build-the-example-library)
+下面的例子加载动态库、调用函数并释放模块。先按[示例指南](https://github.com/weizhiao/Relink/blob/main/examples/README.md#build-the-example-library)
 编译 `libexample.so`，从仓库根目录运行；也可直接执行 `cargo run --example linker_load`。
 
 ```rust
@@ -113,7 +113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-更多用法：[内存加载](examples/load_from_memory.rs) · [目标文件](examples/load_object.rs) · [布局重排](examples/linker_scan_first.rs) · [宿主库导入](examples/host_import.rs)。
+更多用法：[内存加载](https://github.com/weizhiao/Relink/blob/main/examples/load_from_memory.rs) · [目标文件](https://github.com/weizhiao/Relink/blob/main/examples/load_object.rs) · [布局重排](https://github.com/weizhiao/Relink/blob/main/examples/linker_scan_first.rs) · [宿主库导入](https://github.com/weizhiao/Relink/blob/main/examples/host_import.rs)。
 
 ## 平台支持
 
@@ -137,7 +137,7 @@ Xtensa 目前支持动态重定位，但尚不支持 lazy binding 和 TLS 相关
 默认 `full` 启用 `std`、`object` 和 `lazy-binding`。最小宿主配置：
 
 ```toml
-elf_loader = { version = "0.18.0", default-features = false, features = ["std"] }
+elf_loader = { version = "0.19.0", default-features = false, features = ["std"] }
 ```
 
 <details>
@@ -156,7 +156,7 @@ elf_loader = { version = "0.18.0", default-features = false, features = ["std"] 
 
 </details>
 
-TLS 通过 resolver 配置，无需 feature 开关；宿主库需要显式导入，见[示例](examples/host_import.rs)。
+TLS 通过 resolver 配置，无需 feature 开关；宿主库需要显式导入，见[示例](https://github.com/weizhiao/Relink/blob/main/examples/host_import.rs)。
 
 默认 resolver 的所有注册（包括静态 TLS 和自定义 provider）都要求启用 `std` 的 Linux/Android 线程存储后端；其他平台及 `no_std` 环境需提供自定义 resolver。
 线程清理和指针生命周期要求见 [TLS API](https://docs.rs/elf_loader/latest/elf_loader/tls/index.html)。
@@ -164,11 +164,11 @@ TLS 通过 resolver 配置，无需 feature 开关；宿主库需要显式导入
 
 ## 参与贡献
 
-提交 [Issue](https://github.com/weizhiao/Relink/issues) 反馈问题，或按[贡献指南](CONTRIBUTING_zh.md) 提交改进。
+提交 [Issue](https://github.com/weizhiao/Relink/issues) 反馈问题，或按[贡献指南](https://github.com/weizhiao/Relink/blob/main/CONTRIBUTING_zh.md) 提交改进。
 
 ## 许可证
 
-采用 [MIT](LICENSE-MIT) 或 [Apache-2.0](LICENSE-APACHE) 双许可证。
+采用 [MIT](https://github.com/weizhiao/Relink/blob/main/LICENSE-MIT) 或 [Apache-2.0](https://github.com/weizhiao/Relink/blob/main/LICENSE-APACHE) 双许可证。
 
 ## 贡献者
 

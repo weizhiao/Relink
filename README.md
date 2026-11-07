@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> | <a href="README_zh.md">简体中文</a>
+  <a href="https://github.com/weizhiao/Relink/blob/main/README.md">English</a> | <a href="https://github.com/weizhiao/Relink/blob/main/README_zh.md">简体中文</a>
 </p>
 
 <p align="center">
@@ -24,7 +24,7 @@
 
 Relink is a Rust ELF loader and runtime linker for plugins, JITs, and custom runtimes. Take control of dependency resolution, symbol binding, memory layout, and the loading lifecycle.
 
-[Quick start](#quick-start) · [Performance](#benchmarks) · [Platforms](#platform-support) · [Examples](examples/README.md) · [API docs](https://docs.rs/elf_loader)
+[Quick start](#quick-start) · [Performance](#benchmarks) · [Platforms](#platform-support) · [Examples](https://github.com/weizhiao/Relink/blob/main/examples/README.md) · [API docs](https://docs.rs/elf_loader)
 
 ## Highlights
 
@@ -42,20 +42,20 @@ Figures show means and 95% confidence intervals; lower is better.
 
 **Load & teardown · µs**
 
-![Relink and libloading load and teardown times](benches/figures/load-teardown-dark.svg#gh-dark-mode-only)
-![Relink and libloading load and teardown times](benches/figures/load-teardown.svg#gh-light-mode-only)
+![Relink and libloading load and teardown times](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/load-teardown-dark.svg#gh-dark-mode-only)
+![Relink and libloading load and teardown times](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/load-teardown.svg#gh-light-mode-only)
 
 Teardown times are similar overall. Context creation/destruction and host imports are outside timing.
 
 **Symbol lookup · ns**
 
-![Relink and libloading symbol lookup hit and miss times](benches/figures/symbol-lookup-dark.svg#gh-dark-mode-only)
-![Relink and libloading symbol lookup hit and miss times](benches/figures/symbol-lookup.svg#gh-light-mode-only)
+![Relink and libloading symbol lookup hit and miss times](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/symbol-lookup-dark.svg#gh-dark-mode-only)
+![Relink and libloading symbol lookup hit and miss times](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/symbol-lookup.svg#gh-light-mode-only)
 
 Symbol lookup compares public APIs: Relink searches root exports, while `dlsym` may also
 search dependencies. Misses include each API's error handling.
 
-Reproduce with `taskset -c 2 bash ci/bench.sh`. See the [benchmark guide](benches/README.md)
+Reproduce with `taskset -c 2 bash ci/bench.sh`. See the [benchmark guide](https://github.com/weizhiao/Relink/blob/main/benches/README.md)
 for dependencies and measurement scope.
 
 **Transparent Huge Page Optimization**
@@ -63,8 +63,8 @@ for dependencies and measurement scope.
 In these Clang / LLVM compilation workloads, enabling `ThpPolicy::Collapse`
 reduced **execution time by 2.2–4.7%** and **instruction TLB misses by about 99.95% in both workloads**.
 
-![Relink execution time and instruction TLB misses with and without THP](benches/figures/thp-execution-dark.svg#gh-dark-mode-only)
-![Relink execution time and instruction TLB misses with and without THP](benches/figures/thp-execution.svg#gh-light-mode-only)
+![Relink execution time and instruction TLB misses with and without THP](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/thp-execution-dark.svg#gh-dark-mode-only)
+![Relink execution time and instruction TLB misses with and without THP](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/thp-execution.svg#gh-light-mode-only)
 
 Execution shows means and 95% confidence intervals, excluding loading, page
 collapse, setup and validation. iTLB counts cover the whole user-mode worker,
@@ -83,17 +83,17 @@ All figures above use the same commit and environment.
 | THP timing | 5 s target measurement; 30 Clang / 10 LLVM samples |
 | THP TLB sampling | `perf stat`; 2 fresh processes per case, exactly 3 parses or compilations per process (including validation before/after) |
 
-See the [benchmark guide](benches/README.md#thp-figure) for reproduction, memory costs and measurement scope.
+See the [benchmark guide](https://github.com/weizhiao/Relink/blob/main/benches/README.md#thp-figure) for reproduction, memory costs and measurement scope.
 
 ## Quick Start
 
 ```toml
 [dependencies]
-elf_loader = "0.18.0"
+elf_loader = "0.19.0"
 ```
 
 Load a shared library, call a function, then release its modules. First
-[build the example library](examples/README.md#build-the-example-library), then run
+[build the example library](https://github.com/weizhiao/Relink/blob/main/examples/README.md#build-the-example-library), then run
 from the repository root. You can also run `cargo run --example linker_load` directly.
 
 ```rust
@@ -119,7 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-More examples: [memory loading](examples/load_from_memory.rs) · [object files](examples/load_object.rs) · [layout changes](examples/linker_scan_first.rs) · [host imports](examples/host_import.rs).
+More examples: [memory loading](https://github.com/weizhiao/Relink/blob/main/examples/load_from_memory.rs) · [object files](https://github.com/weizhiao/Relink/blob/main/examples/load_object.rs) · [layout changes](https://github.com/weizhiao/Relink/blob/main/examples/linker_scan_first.rs) · [host imports](https://github.com/weizhiao/Relink/blob/main/examples/host_import.rs).
 
 ## Platform Support
 
@@ -144,7 +144,7 @@ relocations.
 The default `full` set enables `std`, `object`, and `lazy-binding`. For a minimal hosted build:
 
 ```toml
-elf_loader = { version = "0.18.0", default-features = false, features = ["std"] }
+elf_loader = { version = "0.19.0", default-features = false, features = ["std"] }
 ```
 
 <details>
@@ -164,7 +164,7 @@ elf_loader = { version = "0.18.0", default-features = false, features = ["std"] 
 </details>
 
 TLS is configured through a resolver, without a feature flag. Host libraries require
-explicit imports; see the [example](examples/host_import.rs).
+explicit imports; see the [example](https://github.com/weizhiao/Relink/blob/main/examples/host_import.rs).
 
 The default TLS resolver requires `std` on Linux/Android, including for static TLS
 and custom providers. Other targets and `no_std` builds need a custom resolver.
@@ -175,11 +175,11 @@ For `use-syscall`, disable default features and do not enable `std`.
 ## Contributing
 
 Report problems in [Issues](https://github.com/weizhiao/Relink/issues), or follow the
-[contribution guide](CONTRIBUTING.md) to submit improvements.
+[contribution guide](https://github.com/weizhiao/Relink/blob/main/CONTRIBUTING.md) to submit improvements.
 
 ## License
 
-Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE).
+Dual-licensed under [MIT](https://github.com/weizhiao/Relink/blob/main/LICENSE-MIT) or [Apache-2.0](https://github.com/weizhiao/Relink/blob/main/LICENSE-APACHE).
 
 ## Contributors
 
