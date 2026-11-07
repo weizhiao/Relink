@@ -1,8 +1,7 @@
 # Relink: Rust ELF Loader and Runtime Linker
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/weizhiao/Relink/main/docs/assets/logo-dark.svg#gh-dark-mode-only" width="500" alt="Relink">
-  <img src="https://raw.githubusercontent.com/weizhiao/Relink/main/docs/assets/logo.svg#gh-light-mode-only" width="500" alt="Relink">
+  <img src="https://raw.githubusercontent.com/weizhiao/Relink/main/docs/assets/logo.svg" width="500" alt="Relink">
 </p>
 
 <p align="center">
@@ -42,15 +41,13 @@ Figures show means and 95% confidence intervals; lower is better.
 
 **Load & teardown · µs**
 
-![Relink and libloading load and teardown times](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/load-teardown-dark.svg#gh-dark-mode-only)
-![Relink and libloading load and teardown times](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/load-teardown.svg#gh-light-mode-only)
+![Relink and libloading load and teardown times](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/load-teardown.svg)
 
 Teardown times are similar overall. Context creation/destruction and host imports are outside timing.
 
 **Symbol lookup · ns**
 
-![Relink and libloading symbol lookup hit and miss times](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/symbol-lookup-dark.svg#gh-dark-mode-only)
-![Relink and libloading symbol lookup hit and miss times](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/symbol-lookup.svg#gh-light-mode-only)
+![Relink and libloading symbol lookup hit and miss times](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/symbol-lookup.svg)
 
 Symbol lookup compares public APIs: Relink searches root exports, while `dlsym` may also
 search dependencies. Misses include each API's error handling.
@@ -63,8 +60,7 @@ for dependencies and measurement scope.
 In these Clang / LLVM compilation workloads, enabling `ThpPolicy::Collapse`
 reduced **execution time by 2.2–4.7%** and **instruction TLB misses by about 99.95% in both workloads**.
 
-![Relink execution time and instruction TLB misses with and without THP](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/thp-execution-dark.svg#gh-dark-mode-only)
-![Relink execution time and instruction TLB misses with and without THP](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/thp-execution.svg#gh-light-mode-only)
+![Relink execution time and instruction TLB misses with and without THP](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/thp-execution.svg)
 
 Execution shows means and 95% confidence intervals, excluding loading, page
 collapse, setup and validation. iTLB counts cover the whole user-mode worker,
@@ -79,7 +75,7 @@ for sampling settings, THP configuration, memory costs and reproduction steps.
 
 ```toml
 [dependencies]
-elf_loader = "0.19.0"
+elf_loader = "0.19.1"
 ```
 
 Load a shared library, call a function, then release its modules. First
@@ -134,7 +130,7 @@ relocations.
 The default `full` set enables `std`, `object`, and `lazy-binding`. For a minimal hosted build:
 
 ```toml
-elf_loader = { version = "0.19.0", default-features = false, features = ["std"] }
+elf_loader = { version = "0.19.1", default-features = false, features = ["std"] }
 ```
 
 <details>

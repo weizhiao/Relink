@@ -1,8 +1,7 @@
 # Relink：Rust ELF 加载器与运行时链接器
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/weizhiao/Relink/main/docs/assets/logo-dark.svg#gh-dark-mode-only" width="500" alt="Relink">
-  <img src="https://raw.githubusercontent.com/weizhiao/Relink/main/docs/assets/logo.svg#gh-light-mode-only" width="500" alt="Relink">
+  <img src="https://raw.githubusercontent.com/weizhiao/Relink/main/docs/assets/logo.svg" width="500" alt="Relink">
 </p>
 
 <p align="center">
@@ -40,15 +39,13 @@ Relink 是用 Rust 编写的 ELF 加载器与运行时链接器，面向插件�
 
 **加载与卸载 · µs**
 
-![Relink 与 libloading 的加载和卸载耗时对比](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/load-teardown-dark.svg#gh-dark-mode-only)
-![Relink 与 libloading 的加载和卸载耗时对比](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/load-teardown.svg#gh-light-mode-only)
+![Relink 与 libloading 的加载和卸载耗时对比](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/load-teardown.svg)
 
 卸载耗时整体相近。不计入 context 创建、销毁及宿主导入。
 
 **符号查找 · ns**
 
-![Relink 与 libloading 的符号命中和未命中耗时对比](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/symbol-lookup-dark.svg#gh-dark-mode-only)
-![Relink 与 libloading 的符号命中和未命中耗时对比](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/symbol-lookup.svg#gh-light-mode-only)
+![Relink 与 libloading 的符号命中和未命中耗时对比](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/symbol-lookup.svg)
 
 符号查找比较的是公开 API：Relink 搜索根库导出，`dlsym` 还可能搜索依赖；未命中包含各自的错误处理成本。
 
@@ -59,8 +56,7 @@ Relink 是用 Rust 编写的 ELF 加载器与运行时链接器，面向插件�
 在本次 Clang / LLVM 编译负载测试中，启用 `ThpPolicy::Collapse` 后，
 **执行耗时减少 2.2–4.7%**，两组的**指令 TLB miss 均减少约 99.95%**。
 
-![Relink 启用 THP 前后的执行耗时和指令 TLB miss 对比](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/thp-execution-dark.svg#gh-dark-mode-only)
-![Relink 启用 THP 前后的执行耗时和指令 TLB miss 对比](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/thp-execution.svg#gh-light-mode-only)
+![Relink 启用 THP 前后的执行耗时和指令 TLB miss 对比](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/thp-execution.svg)
 
 执行耗时展示均值和 95% 置信区间，不含加载、大页合并、准备与校验。
 iTLB 为整进程用户态计数，包含这些阶段；图中为两次计数的均值，越低越好。
@@ -73,7 +69,7 @@ glibc 2.43、Rust 1.96.0，固定 CPU 2，使用热文件缓存。
 
 ```toml
 [dependencies]
-elf_loader = "0.19.0"
+elf_loader = "0.19.1"
 ```
 
 下面的例子加载动态库、调用函数并释放模块。先按[示例指南](https://github.com/weizhiao/Relink/blob/main/examples/README.md#build-the-example-library)
@@ -126,7 +122,7 @@ Xtensa 目前支持动态重定位，但尚不支持 lazy binding 和 TLS 相关
 默认 `full` 启用 `std`、`object` 和 `lazy-binding`。最小宿主配置：
 
 ```toml
-elf_loader = { version = "0.19.0", default-features = false, features = ["std"] }
+elf_loader = { version = "0.19.1", default-features = false, features = ["std"] }
 ```
 
 <details>
