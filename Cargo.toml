@@ -36,7 +36,7 @@ syscalls = { version = "0.8.1", default-features = false }
 elf = { version = "0.8", default-features = false }
 cfg-if = '1.0'
 elf_loader = { version = "0.19.1", path = ".", default-features = false }
-object = "0.40"
+object = "0.41"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
