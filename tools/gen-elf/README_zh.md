@@ -82,5 +82,3 @@ writer.write_file(Path::new("test.o"), &symbols, &[])?;
 ## 在测试中使用
 
 该工具特别适用于 `elf_loader` 的集成测试。你可以动态生成具有特定重定位类型的 ELF，使用加载器加载它，并通过检查 `ElfWriteOutput` 验证重定位是否正确应用。
-
-有关全面示例，请参阅 [`tests/relocator`](../../tests/relocator)。

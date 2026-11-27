@@ -455,7 +455,9 @@ impl<Arch: RelocationArch> RelocatedLoad<Arch> {
         }
 
         let initializers = self.session.initializers();
-        let CommitResult { modules, pins } = self.session.commit_into(&mut context.committed)?;
+        let CommitResult { modules, pins } = self
+            .session
+            .commit_into(&mut context.committed, self.root)?;
         let root_id = context.committed.make_module_id(self.root);
         let lease = context.acquire(root_id)?;
         Ok(PublishedLoad {

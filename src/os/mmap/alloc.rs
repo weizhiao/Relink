@@ -96,29 +96,3 @@ impl Mmap for AllocMmap {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn null_hint_allocates_memory() {
-        let mapper = AllocMmap::new();
-        let region = unsafe {
-            mapper
-                .create_space(
-                    SpaceLayout {
-                        addr: Some(VmAddr::null()),
-                        len: mapper.page_size().bytes(),
-                        align: mapper.page_size().bytes(),
-                        offset: 0,
-                    },
-                    ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
-                    SpaceInit::Zeroed,
-                )
-                .unwrap()
-        };
-
-        assert_ne!(region.addr(), VmAddr::null());
-    }
-}

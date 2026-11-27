@@ -2,7 +2,7 @@ use super::unload::{UnloadGroup, UnloadedModule};
 use crate::{
     LinkContextError, LinkerError, Result,
     arch::NativeArch,
-    entity::{PrimaryMap, entity_ref},
+    entity::{EntitySet, PrimaryMap, entity_ref},
     image::{ModuleHandle, ModuleInstanceId, ModuleScope},
     input::{ModuleSourceId, Path, PathBuf},
     linker::AddressIndex,
@@ -503,7 +503,11 @@ where
         })
     }
 
-    pub(crate) fn remove_batch(&mut self, order: Vec<ModuleSlot>) -> UnloadGroup<Meta, Arch> {
+    pub(crate) fn remove_batch(
+        &mut self,
+        order: Vec<ModuleSlot>,
+        reachable: &EntitySet<ModuleSlot>,
+    ) -> UnloadGroup<Meta, Arch> {
         let mut modules = Vec::with_capacity(order.len());
         for &slot in &order {
             let id = self.make_module_id(slot);
@@ -518,7 +522,7 @@ where
             } else {
                 self.free_slots.extend(order);
             }
-            self.prune_removed();
+            self.prune_removed(reachable);
         }
         UnloadGroup::new(modules)
     }
@@ -551,10 +555,21 @@ where
         (entry.module, entry.retained, entry.meta)
     }
 
-    fn prune_removed(&mut self) {
+    fn prune_removed(&mut self, reachable: &EntitySet<ModuleSlot>) {
+        self.lifecycle.retain(|slot| {
+            let Some(entry) = self.entries[*slot].entry.as_mut() else {
+                return false;
+            };
+            // A surviving dependency can outlive its loader and its slot can be reused.
+            if entry
+                .loader
+                .is_some_and(|loader| !reachable.contains(loader))
+            {
+                entry.loader = None;
+            }
+            true
+        });
         let entries = &self.entries;
-        self.lifecycle
-            .retain(|slot| entries.get(*slot).is_some_and(|cell| cell.entry.is_some()));
         // One pass for the whole unload group, preserving exported snapshots.
         Arc::make_mut(&mut self.addresses).retain(|id| {
             entries
@@ -619,6 +634,7 @@ pub(in crate::linker) struct StoredEntry<Meta = (), Arch: RelocationArch = Nativ
     entry_key: ModuleKey,
     aliases: Vec<ModuleKey>,
     module: ModuleHandle<Arch>,
+    loader: Option<ModuleSlot>,
     direct_deps: Box<[ModuleSlot]>,
     // Keeps only this module's dependency closure alive for deferred lookup and
     // finalization; the wider relocation group is owned by its root entry.
@@ -642,6 +658,11 @@ where
     #[inline]
     pub(in crate::linker) fn handle(&self) -> &ModuleHandle<Arch> {
         &self.module
+    }
+
+    #[inline]
+    pub(in crate::linker) const fn loader(&self) -> Option<ModuleSlot> {
+        self.loader
     }
 
     #[inline]
@@ -673,6 +694,7 @@ where
     pub(in crate::linker) fn new(
         entry_key: ModuleKey,
         module: ModuleHandle<Arch>,
+        loader: Option<ModuleSlot>,
         direct_deps: Box<[ModuleSlot]>,
         retained: ModuleScope<Arch>,
         roots: usize,
@@ -682,6 +704,7 @@ where
             entry_key,
             aliases: Vec::new(),
             module,
+            loader,
             direct_deps,
             retained,
             load_group: None,

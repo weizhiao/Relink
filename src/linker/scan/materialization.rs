@@ -247,30 +247,3 @@ impl ArenaState {
         })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::os::PageSize;
-
-    #[test]
-    fn fallback_shared_arena_reuses_existing_compatible_arena() {
-        let mut plan = MemoryLayoutPlan::default();
-        let arena_id = plan.create_arena(ArenaDescriptor::new(
-            PageSize::Huge2MiB,
-            MemoryClass::Code,
-            ArenaSharing::Shared,
-        ));
-        let mut state = ArenaState::new();
-
-        let selected = state.ensure_arena(
-            &mut plan,
-            ModuleId::new(0),
-            ClassPolicy::new(PageSize::Huge2MiB, ArenaSharing::Shared),
-            MemoryClass::Code,
-        );
-
-        assert_eq!(selected, arena_id);
-        assert_eq!(plan.arena_pairs().count(), 1);
-    }
-}

@@ -1,27 +1,18 @@
-# Test Layers
+# End-to-end tests
 
-Relink's tests focus on the reusable ELF mechanisms exposed by this crate:
+On Linux with glibc, run `cargo test --locked --features version` with a C
+compiler, `libz.so.1`, and `libexpat.so.1` installed. Set `CC` to select the
+fixture compiler when cross-compiling.
 
-- `loader`: ELF classification, scanning, mapping, metadata reuse, and load-time errors.
-- `relocator`: dynamic/object relocation and symbol resolution.
-- `tls`: resolver integration, TLS relocations, and thread-local storage behavior.
-- `lazy`: runtime binding, jump-slot updates, retained scopes, and failure modes.
-- `linker`: dependency resolution, scan-first planning, context updates, and lifecycle staging.
-- `observer`: loader, relocator, object, and linker event customization.
+| Test target | Public interfaces | Observable result |
+| --- | --- | --- |
+| [modules](modules.rs) | `KeyResolver`, `SyntheticModule`, `get_version` | Retry a plugin after a missing dependency. Its code calls a host function and reads the default version of a host variable. An explicit lookup reads the older value. |
+| [modules](modules.rs) | `DsoBuilder`, `Loader::with_arch`, `AllocMmap` | Generate an i386 shared object in memory and read an exported revision string on the test host. This case also runs with `--no-default-features`. |
+| [runtime](runtime.rs) | `Linker`, `SearchPathResolver`, `LinkContext::import`, `module_loader` | Import a plugin and its dependency into another context. Release the source and call the imported plugin. |
+| [runtime](runtime.rs) | `DefaultTlsResolver`, object loading and relocation | Two threads modify independent counters. On x86-64 and RISC-V 64, code in one `.o` calls code in another. |
+| [extensions](extensions.rs) | `ElfBinary`, relocation observers, `defer_init`, lazy binding, scan passes | Observe a constructor's result before and after initialization, bind a late host callback, and read configuration changed by a scan pass. |
+| [real_libraries](real_libraries.rs) | Host imports, loader cache, typed symbol lookup | Relink and glibc open the same zlib and Expat files and return the expected CRC-32 and XML parse results. |
 
-Component-flow tests use compiler-produced ELF files. Generated images are
-reserved for malformed inputs, exact relocation layouts, and synthetic-module
-behavior where byte-level control is part of the assertion.
-
-Each component owns the fixtures that define its test scenarios. The generic
-fixture compiler lives in `tests/fixture_build`. Tests do not reuse fixtures
-from another component or from examples, so those scenarios can evolve
-independently.
-
-Architecture-specific end-to-end suites live under their component layer. For
-example, `relocator::riscv64` cross-compiles real RISC-V objects and executes
-the relocated code through cross's QEMU runner in CI.
-
-End-to-end `dlopen`, `dlsym`, `RTLD_*`, process startup, and glibc compatibility
-belong in the downstream `rust-dynlinker` test suite. Relink keeps only the
-smoke coverage needed to verify that its components compose correctly.
+The [mini-loader](../crates/mini-loader) exercises process startup in CI. The
+[Xtensa example](../examples/xtensa-qemu) calls a plugin through a custom memory
+mapping in QEMU. The [benchmarks](../benches/README.md) measure huge-page policy.

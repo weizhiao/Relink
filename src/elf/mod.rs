@@ -25,12 +25,8 @@ pub mod write;
 
 // Internal module re-exports for use within the crate
 pub(crate) use dynamic::{ElfDynamic, ElfDynamicHashTab, LifecycleSpec, parse_dynamic_entries};
-#[cfg(test)]
-pub(crate) use layout::ElfEhdr;
 pub(crate) use phdr::ElfPhdrs;
 pub(crate) use symbol::ElfStringTable;
-#[cfg(test)]
-pub(crate) use symbol::SymbolInfo;
 
 // Public API exports
 pub use dynamic::{ElfDyn, ElfDynamicTag};

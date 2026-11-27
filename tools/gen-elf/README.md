@@ -83,5 +83,3 @@ Describe symbols with various scopes and types:
 ## Usage in Tests
 
 This tool is particularly useful for integration testing of `elf_loader`. You can dynamically generate an ELF with specific relocation types, load it with your loader, and verify that relocations are applied correctly by inspecting `ElfWriteOutput`.
-
-See [`tests/relocator`](../../tests/relocator) for comprehensive examples.

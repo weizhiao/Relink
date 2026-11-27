@@ -99,9 +99,9 @@ where
     ) -> ModuleSlot {
         let source = payload.source_id();
         let (path, soname) = search_aliases(payload.search(), &entry_key);
-        let (slot, generation) = self.session.reserve_source(self.committed, source);
+        let (slot, generation) = self.session.reserve_source(self.committed, source, loader);
         self.session
-            .stage_dynamic(slot, generation, entry_key.clone(), payload, loader);
+            .stage_dynamic(slot, generation, entry_key.clone(), payload);
         self.session.bind_key(entry_key, slot);
         if let Some(path) = path {
             self.session.bind_key(path, slot);
@@ -116,17 +116,17 @@ where
         &mut self,
         entry_key: ModuleKey,
         module: ModuleHandle<Arch>,
-        direct_deps: Box<[ModuleSlot]>,
+        parent: Option<ModuleSlot>,
     ) -> ModuleSlot {
         let (path, soname) = module
             .search()
             .map(|search| search_aliases(search, &entry_key))
             .unwrap_or_default();
-        let (slot, generation) = self
-            .session
-            .reserve_source(self.committed, module.source_id());
+        let (slot, generation) =
+            self.session
+                .reserve_source(self.committed, module.source_id(), parent);
         self.session
-            .stage_module(slot, generation, entry_key.clone(), module, direct_deps);
+            .stage_module(slot, generation, entry_key.clone(), module, Box::default());
         self.session.bind_key(entry_key, slot);
         if let Some(path) = path {
             self.session.bind_key(path, slot);
@@ -166,7 +166,7 @@ where
                         slot
                     } else {
                         module_deps = Some(deps);
-                        self.stage_module(entry_key, module, Box::default())
+                        self.stage_module(entry_key, module, parent)
                     }
                 }
             }
@@ -179,7 +179,7 @@ where
         if let Some(deps) = module_deps {
             let mut direct_deps = Vec::with_capacity(deps.len());
             for ResolvedDependency { key, resolved } in deps {
-                let dep = self.stage_with(key, resolved, parent, materialize)?;
+                let dep = self.stage_with(key, resolved, Some(slot), materialize)?;
                 push_dep(&mut direct_deps, dep);
             }
             self.session
@@ -211,6 +211,7 @@ where
         self.session
             .dynamic_payload(slot)
             .map(DependencySource::search)
+            .or_else(|| self.session.staged_module(slot)?.search())
             .or_else(|| {
                 self.committed
                     .module(slot)
@@ -225,7 +226,11 @@ where
             {
                 return Ok(());
             }
-            let Some(loader) = self.session.loader(slot) else {
+            let Some(loader) = self
+                .session
+                .loader(slot)
+                .or_else(|| self.committed.module(slot)?.loader())
+            else {
                 return Ok(());
             };
             slot = loader;

@@ -278,21 +278,3 @@ impl<D: Send + Sync + 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolv
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{LoadedElf, LoadedExec, StaticExec};
-    use crate::image::ElfCoreRef;
-
-    struct NonCloneData;
-
-    #[test]
-    fn image_handles_clone_without_user_data_clone() {
-        fn assert_clone<T: Clone>() {}
-
-        assert_clone::<ElfCoreRef<NonCloneData>>();
-        assert_clone::<StaticExec<NonCloneData>>();
-        assert_clone::<LoadedExec<NonCloneData>>();
-        assert_clone::<LoadedElf<NonCloneData>>();
-    }
-}

@@ -71,19 +71,3 @@ impl ModuleSourceId {
         Self([Self::GENERATED, 0, 0, value as u64])
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::ModuleSourceId;
-
-    #[test]
-    fn source_kinds_do_not_overlap() {
-        let file = ModuleSourceId::file(7, u128::MAX);
-        let opaque = ModuleSourceId::opaque(7, u128::MAX);
-        let generated = ModuleSourceId::fresh();
-
-        assert_ne!(file, opaque);
-        assert_ne!(file, generated);
-        assert_ne!(opaque, generated);
-    }
-}

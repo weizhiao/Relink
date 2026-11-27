@@ -288,7 +288,6 @@ dependencies = [
  "criterion",
  "elf",
  "env_logger",
- "gen-elf",
  "hashbrown 0.16.1",
  "libc",
  "libloading",

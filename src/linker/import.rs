@@ -179,6 +179,9 @@ fn copy_modules<Arch, Tls, TargetMeta, SourceMeta>(
                 StoredEntry::new(
                     module.entry_key().clone(),
                     module.handle().clone(),
+                    module
+                        .loader()
+                        .and_then(|loader| mapped.get(loader).copied()),
                     deps,
                     module.retained().clone(),
                     0,
@@ -407,6 +410,7 @@ where
                     StoredEntry::new(
                         node.key.clone(),
                         node.module,
+                        None,
                         node.direct_deps,
                         node.retained,
                         1,
@@ -518,154 +522,5 @@ where
             imported.push(ModuleLease::new(id));
         }
         Ok(imported.into_boxed_slice())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{GraphModule, LinkContext};
-    use crate::runtime::{AddressSpaceId, Domain};
-    use crate::{
-        Error, LinkContextError, LinkerError,
-        arch::NativeArch,
-        image::{ModuleHandle, SyntheticModule},
-    };
-    use alloc::vec::Vec;
-
-    fn module(name: &str) -> ModuleHandle<NativeArch> {
-        ModuleHandle::new(SyntheticModule::empty(
-            &Domain::<NativeArch>::native(AddressSpaceId::PROCESS),
-            name,
-        ))
-    }
-
-    #[test]
-    fn inserts_cycle() {
-        let first = module("first");
-        let second = module("second");
-        let first_weak = first.downgrade();
-        let second_weak = second.downgrade();
-        let first_instance = first.state().instance_id();
-        let second_instance = second.state().instance_id();
-        let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
-
-        let leases = context
-            .insert_batch([
-                GraphModule::new("first", first).dependencies([second_instance]),
-                GraphModule::new("second", second).dependencies([first_instance]),
-            ])
-            .unwrap();
-        let mut leases = leases.into_vec().into_iter();
-        let first = leases.next().unwrap();
-        let second = leases.next().unwrap();
-
-        assert_eq!(
-            context.direct_deps(first.id()).unwrap().collect::<Vec<_>>(),
-            [second.id()]
-        );
-        assert_eq!(
-            context
-                .direct_deps(second.id())
-                .unwrap()
-                .collect::<Vec<_>>(),
-            [first.id()]
-        );
-        assert!(context.release(first).unwrap().is_empty());
-        assert_eq!(context.release(second).unwrap().len(), 2);
-        assert!(context.is_empty());
-        assert!(first_weak.upgrade().is_none());
-        assert!(second_weak.upgrade().is_none());
-    }
-
-    #[test]
-    fn duplicate_keys_keep_order() {
-        let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
-        let leases = context
-            .insert_batch([
-                GraphModule::new("shared", module("first")),
-                GraphModule::new("shared", module("second")),
-            ])
-            .unwrap();
-        let mut leases = leases.into_vec().into_iter();
-        let first = leases.next().unwrap();
-        let second = leases.next().unwrap();
-
-        assert_eq!(context.module_id("shared"), Some(first.id()));
-        assert_eq!(context.release(first).unwrap().len(), 1);
-        assert_eq!(context.module_id("shared"), Some(second.id()));
-        assert_eq!(context.release(second).unwrap().len(), 1);
-    }
-
-    #[test]
-    fn uses_committed_dependency() {
-        let dependency = module("dependency");
-        let dependency_instance = dependency.state().instance_id();
-        let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
-        let dependency = context
-            .insert(GraphModule::new("dependency", dependency))
-            .unwrap();
-
-        let root = context
-            .insert_batch([
-                GraphModule::new("root", module("root")).dependencies([dependency_instance])
-            ])
-            .unwrap()
-            .into_vec()
-            .pop()
-            .unwrap();
-
-        assert_eq!(
-            context.direct_deps(root.id()).unwrap().collect::<Vec<_>>(),
-            [dependency.id()]
-        );
-        assert!(context.release(dependency).unwrap().is_empty());
-        assert_eq!(context.release(root).unwrap().len(), 2);
-    }
-
-    #[test]
-    fn missing_dependency_does_not_publish() {
-        let missing = module("missing").state().instance_id();
-        let mut context = LinkContext::<()>::new(Domain::native(AddressSpaceId::PROCESS));
-        let error = match context
-            .insert_batch([GraphModule::new("root", module("root")).dependencies([missing])])
-        {
-            Ok(_) => panic!("missing dependency should fail"),
-            Err(error) => error,
-        };
-
-        let Error::Linker(LinkerError::Context { reason }) = error else {
-            panic!("unexpected graph error: {error}");
-        };
-        assert!(matches!(
-            *reason,
-            LinkContextError::DependencyMissing { id } if id == missing
-        ));
-        assert!(context.is_empty());
-        assert_eq!(context.module_id("root"), None);
-    }
-
-    #[test]
-    fn duplicate_instance_rejects_entire_batch() {
-        let shared = module("shared");
-        let source = shared.source_id();
-        let mut context = LinkContext::<usize>::new(Domain::native(AddressSpaceId::PROCESS));
-        let first = context
-            .insert(GraphModule::with_meta("first", shared.clone(), 7))
-            .unwrap();
-        let error = context
-            .insert_batch([
-                GraphModule::with_meta("new", module("new"), 9),
-                GraphModule::with_meta("alias", shared, 11),
-            ])
-            .unwrap_err();
-        let Error::Linker(LinkerError::Context { reason }) = error else {
-            panic!("unexpected insertion error: {error}");
-        };
-        assert!(matches!(*reason, LinkContextError::SourceOccupied { source: id } if id == source));
-        assert_eq!(context.module_id("new"), None);
-        assert_eq!(context.module_id("alias"), None);
-        assert_eq!(*context.meta(first.id()).unwrap(), 7);
-        assert_eq!(context.release(first).unwrap().len(), 1);
-        assert!(context.is_empty());
     }
 }

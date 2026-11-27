@@ -23,7 +23,7 @@ cargo check --no-default-features --features use-syscall
 ```
 
 `use-syscall` 与 `std` 互斥，因此不能使用 `--all-features`。
-测试夹具与准备步骤见[测试分层](tests/README.md)和[示例指南](examples/README.md)。
+测试夹具与准备步骤见[端到端测试](tests/README.md)和[示例指南](examples/README.md)。
 CI 覆盖交叉目标及需要 nightly 的 `mini-loader` 构建；修改相关组件时，可在本地运行对应检查。
 
 ## Pull Request

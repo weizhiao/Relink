@@ -1,5 +1,6 @@
 use super::{
     context::LinkContext,
+    resolver::DependencySource,
     storage::{CommittedStorage, ModuleId, ModuleKey, ModuleSlot, ReservationReturns, StoredEntry},
 };
 use crate::{
@@ -20,7 +21,6 @@ use alloc::{
 pub(crate) struct GraphEntry<P> {
     entry_key: ModuleKey,
     payload: P,
-    loader: Option<ModuleSlot>,
     direct_deps: Option<Box<[ModuleSlot]>>,
 }
 
@@ -33,11 +33,6 @@ impl<P> GraphEntry<P> {
     #[inline]
     pub(crate) fn direct_deps(&self) -> Option<&[ModuleSlot]> {
         self.direct_deps.as_deref()
-    }
-
-    #[inline]
-    pub(crate) const fn loader(&self) -> Option<ModuleSlot> {
-        self.loader
     }
 
     #[inline]
@@ -104,6 +99,7 @@ impl<Arch: RelocationArch> ReadyModule<Arch> {
 
 struct StagedSource {
     slot: ModuleSlot,
+    loader: Option<ModuleSlot>,
     generation: u32,
     ready_index: Option<usize>,
 }
@@ -118,6 +114,7 @@ impl PendingSources {
         &mut self,
         committed: &mut CommittedStorage<Meta, Arch>,
         source: ModuleSourceId,
+        loader: Option<ModuleSlot>,
     ) -> (ModuleSlot, u32) {
         if self.entries.is_empty() {
             committed.reclaim_returned_slots();
@@ -129,6 +126,7 @@ impl PendingSources {
         let generation = committed.generation(slot);
         entry.insert(StagedSource {
             slot,
+            loader,
             generation,
             ready_index: None,
         });
@@ -223,8 +221,9 @@ where
         &mut self,
         committed: &mut CommittedStorage<Meta, Arch>,
         source: ModuleSourceId,
+        loader: Option<ModuleSlot>,
     ) -> (ModuleSlot, u32) {
-        self.sources.reserve(committed, source)
+        self.sources.reserve(committed, source, loader)
     }
 
     #[inline]
@@ -262,8 +261,19 @@ where
     }
 
     #[inline]
-    pub(crate) fn loader(&self, slot: ModuleSlot) -> Option<ModuleSlot> {
-        self.dynamics.get(&slot).and_then(GraphEntry::loader)
+    pub(crate) fn staged_module(&self, slot: ModuleSlot) -> Option<&ModuleHandle<Arch>> {
+        self.modules.get(&slot).map(PendingModule::module)
+    }
+
+    pub(crate) fn loader(&self, slot: ModuleSlot) -> Option<ModuleSlot>
+    where
+        P: DependencySource,
+    {
+        let source = self
+            .dynamic_payload(slot)
+            .map(DependencySource::source_id)
+            .or_else(|| self.staged_module(slot).map(|module| module.source_id()))?;
+        self.sources.entries[&source].loader
     }
 
     pub(crate) fn set_direct_deps(&mut self, slot: ModuleSlot, direct_deps: Vec<ModuleSlot>) {
@@ -286,7 +296,6 @@ where
         generation: u32,
         entry_key: ModuleKey,
         payload: P,
-        loader: Option<ModuleSlot>,
     ) {
         self.track(slot, generation);
         let previous = self.dynamics.insert(
@@ -294,7 +303,6 @@ where
             GraphEntry {
                 entry_key,
                 payload,
-                loader,
                 direct_deps: None,
             },
         );
@@ -356,7 +364,6 @@ where
             GraphEntry {
                 entry_key,
                 payload,
-                loader: None,
                 direct_deps: Some(direct_deps),
             },
         );
@@ -655,6 +662,7 @@ where
     pub(crate) fn commit_into<Meta>(
         self,
         committed: &mut CommittedStorage<Meta, Arch>,
+        root: ModuleSlot,
     ) -> Result<CommitResult>
     where
         Meta: Default,
@@ -735,9 +743,24 @@ where
                     module,
                     direct_deps,
                 } = pending;
+                // An explicit root can use its caller's search paths during resolution.
+                // Only dependencies retain their introducing module after publication.
+                let loader = if slot == root {
+                    None
+                } else {
+                    pending_sources.entries[&module.source_id()].loader
+                };
                 committed_ids.push(publication.insert(
                     slot,
-                    StoredEntry::new(entry_key, module, direct_deps, retained, 0, Meta::default()),
+                    StoredEntry::new(
+                        entry_key,
+                        module,
+                        loader,
+                        direct_deps,
+                        retained,
+                        0,
+                        Meta::default(),
+                    ),
                 ));
             }
             for (key, modules) in bindings {

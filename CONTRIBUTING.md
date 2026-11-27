@@ -25,7 +25,7 @@ cargo check --no-default-features --features use-syscall
 ```
 
 `use-syscall` and `std` are mutually exclusive, so `--all-features` is not a valid
-configuration. See [test layers](tests/README.md) and [examples](examples/README.md)
+configuration. See [end-to-end tests](tests/README.md) and [examples](examples/README.md)
 for fixtures and setup. Cross-target checks and the nightly `mini-loader` build
 are covered by CI; run the relevant jobs locally when changing those components.
 

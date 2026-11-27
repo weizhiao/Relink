@@ -69,7 +69,7 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             channel: stable
-            features: "use-syscall,object"
+            features: "use-syscall,object,version"
           - target: x86_64-unknown-linux-gnu
             channel: stable
             features: "std"
@@ -118,7 +118,7 @@ jobs:
         cross test -p elf_loader -Z build-std=std,panic_unwind
         --target riscv64gc-unknown-linux-gnu
         --no-default-features --features object,use-syscall
-        --test relocator riscv64:: -- --nocapture
+        --test runtime link_objects -- --exact
 
   test-xtensa-qemu:
     runs-on: ubuntu-latest
@@ -171,10 +171,6 @@ jobs:
         toolchain: stable
     - name: Run example
       run: cargo run -p windows-elf-loader --example from_memory
-    - name: Test library and standard-library TLS storage
-      run: cargo test -p elf_loader --no-default-features --features std --lib --test tls
-    - name: Test optimized standard-library TLS storage
-      run: cargo test -p elf_loader --no-default-features --features std --release --test tls
 
   build-no-std:
     runs-on: ubuntu-latest
