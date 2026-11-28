@@ -77,11 +77,7 @@ impl<Binder> Relocator<Binder> {
     }
 
     /// Overrides the lazy PLT binder used to prepare runtime binding.
-    pub const fn with_lazy_binder<NewBinder>(self, binder: NewBinder) -> Relocator<NewBinder>
-    where
-        Binder: Copy,
-    {
-        let _ = self.lazy_binder;
+    pub fn with_lazy_binder<NewBinder>(self, binder: NewBinder) -> Relocator<NewBinder> {
         Relocator {
             lazy_binder: binder,
             run_init: self.run_init,

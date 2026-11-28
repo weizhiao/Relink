@@ -7,13 +7,12 @@ use super::{
 use crate::{
     Loader, Relocator,
     arch::NativeArch,
-    const_builder::NoDrop,
     os::Mmap,
     relocation::{LookupOrder, RelocationArch},
     tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{fmt, marker::PhantomData, mem::MaybeUninit, ptr};
+use core::{fmt, marker::PhantomData};
 
 /// Result of a fully initialized linker load operation.
 ///
@@ -141,12 +140,6 @@ where
     }
 }
 
-struct LinkerFields<L, R, RelocBinder> {
-    loader: NoDrop<L>,
-    resolver: NoDrop<R>,
-    relocator: NoDrop<Relocator<RelocBinder>>,
-}
-
 impl Linker {
     /// Creates a linker using the default loader and native target architecture.
     #[inline]
@@ -164,7 +157,7 @@ impl Linker {
     /// The loader and [`crate::LinkContext`] must use the same architecture.
     #[inline]
     #[allow(clippy::type_complexity)]
-    pub const fn with_arch<NewArch>(self) -> Linker<NewArch, Loader<(), NewArch>, (), ()>
+    pub fn with_arch<NewArch>(self) -> Linker<NewArch, Loader<(), NewArch>, (), ()>
     where
         NewArch: RelocationArch,
     {
@@ -188,37 +181,12 @@ impl<L, R, RelocBinder, Arch> Linker<Arch, L, R, RelocBinder>
 where
     Arch: RelocationArch,
 {
-    #[inline]
-    const fn into_fields(self) -> LinkerFields<L, R, RelocBinder> {
-        let this = MaybeUninit::new(self);
-        let this = this.as_ptr();
-
-        // SAFETY: `this` points at the fully initialized `self` stored inside
-        // `MaybeUninit`, so every field read below is initialized and aligned.
-        // The original `Linker` is intentionally not dropped; builder methods
-        // that replace a field require that old field to be `Copy`.
-        unsafe {
-            LinkerFields {
-                loader: NoDrop::read(ptr::addr_of!((*this).loader)),
-                resolver: NoDrop::read(ptr::addr_of!((*this).resolver)),
-                relocator: NoDrop::read(ptr::addr_of!((*this).relocator)),
-            }
-        }
-    }
-
     /// Sets the key resolver used to resolve root keys and dependencies.
-    pub const fn with_resolver<NewR>(self, resolver: NewR) -> Linker<Arch, L, NewR, RelocBinder>
-    where
-        R: Copy,
-    {
-        let LinkerFields {
-            loader, relocator, ..
-        } = self.into_fields();
-
+    pub fn with_resolver<NewR>(self, resolver: NewR) -> Linker<Arch, L, NewR, RelocBinder> {
         Linker {
-            loader: loader.into_inner(),
+            loader: self.loader,
             resolver,
-            relocator: relocator.into_inner(),
+            relocator: self.relocator,
             marker: PhantomData,
         }
     }
@@ -226,23 +194,11 @@ where
     /// Sets the relocator template used for loaded modules.
     ///
     /// Dynamic initialization remains deferred until after the module group is committed.
-    pub const fn with_relocator<NewRelocBinder>(
+    pub fn with_relocator<NewRelocBinder>(
         self,
         relocator: Relocator<NewRelocBinder>,
-    ) -> Linker<Arch, L, R, NewRelocBinder>
-    where
-        Relocator<RelocBinder>: Copy,
-    {
-        let LinkerFields {
-            loader, resolver, ..
-        } = self.into_fields();
-
-        Linker {
-            loader: loader.into_inner(),
-            resolver: resolver.into_inner(),
-            relocator: relocator.defer_init(),
-            marker: PhantomData,
-        }
+    ) -> Linker<Arch, L, R, NewRelocBinder> {
+        self.map_relocator(|_| relocator)
     }
 
     /// Reconfigures the relocator template used for loaded modules.
@@ -281,27 +237,15 @@ where
 {
     /// Sets the loader template used to load root modules and dependencies.
     #[allow(clippy::type_complexity)]
-    pub const fn with_loader<NewD, NewM>(
+    pub fn with_loader<NewD, NewM>(
         self,
         loader: Loader<NewD, Arch, NewM>,
     ) -> Linker<Arch, Loader<NewD, Arch, NewM>, R, RelocBinder>
     where
-        Loader<D, Arch, M>: Copy,
         NewD: Send + Sync + 'static,
         NewM: Mmap,
     {
-        let LinkerFields {
-            relocator,
-            resolver,
-            ..
-        } = self.into_fields();
-
-        Linker {
-            loader,
-            resolver: resolver.into_inner(),
-            relocator: relocator.into_inner(),
-            marker: PhantomData,
-        }
+        self.map_loader(|_| loader)
     }
 
     /// Reconfigures the underlying loader.

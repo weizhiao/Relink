@@ -52,7 +52,7 @@ impl ImageMemory for UnmappedImageMemory {
     }
 
     #[inline]
-    fn read_bytes(&self, _addr: VmAddr, dst: &mut [u8]) -> Result<()> {
+    unsafe fn read_bytes(&self, _addr: VmAddr, dst: &mut [u8]) -> Result<()> {
         if dst.is_empty() {
             return Ok(());
         }
@@ -63,7 +63,7 @@ impl ImageMemory for UnmappedImageMemory {
     }
 
     #[inline]
-    fn write_bytes(&self, _addr: VmAddr, src: &[u8]) -> Result<()> {
+    unsafe fn write_bytes(&self, _addr: VmAddr, src: &[u8]) -> Result<()> {
         if src.is_empty() {
             return Ok(());
         }

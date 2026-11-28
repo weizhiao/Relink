@@ -22,10 +22,7 @@ use crate::{
     sync::Arc,
 };
 use alloc::vec::Vec;
-use core::{
-    mem::{MaybeUninit, size_of},
-    ptr::NonNull,
-};
+use core::{mem::size_of, ptr::NonNull};
 use hashbrown::{HashMap, HashSet, hash_map::Entry};
 
 /// Convert section flags to memory protection flags
@@ -175,13 +172,13 @@ impl<R: RegionAccess> ImageMemory for ObjectSegmentView<'_, R> {
     }
 
     #[inline]
-    fn read_bytes(&self, addr: VmAddr, dst: &mut [u8]) -> Result<()> {
-        self.segment_for_addr(addr)?.read_bytes(addr, dst)
+    unsafe fn read_bytes(&self, addr: VmAddr, dst: &mut [u8]) -> Result<()> {
+        unsafe { self.segment_for_addr(addr)?.read_bytes(addr, dst) }
     }
 
     #[inline]
-    fn write_bytes(&self, addr: VmAddr, src: &[u8]) -> Result<()> {
-        self.segment_for_addr(addr)?.write_bytes(addr, src)
+    unsafe fn write_bytes(&self, addr: VmAddr, src: &[u8]) -> Result<()> {
+        unsafe { self.segment_for_addr(addr)?.write_bytes(addr, src) }
     }
 }
 
@@ -566,7 +563,7 @@ impl SectionSegmentSet {
             )
         }?;
         let base = region.addr();
-        Ok(ElfSegments::new(region, base, VmOffset::new(0)))
+        Ok(ElfSegments::new(region, base))
     }
 
     fn load_segments<M: Mmap + ?Sized>(
@@ -788,10 +785,9 @@ where
         let file_offset = target.sh_offset().checked_add(offset).ok_or_else(|| {
             ParseShdrError::malformed("REL relocation addend file offset overflows")
         })?;
-        let mut word = MaybeUninit::<<Arch::Layout as ElfLayout>::Word>::uninit();
-        let bytes = unsafe { core::slice::from_raw_parts_mut(word.as_mut_ptr().cast::<u8>(), len) };
-        object.read(bytes, file_offset)?;
-        return Ok(unsafe { word.assume_init() }.to_usize() as isize);
+        let word: <Arch::Layout as ElfLayout>::Word =
+            crate::aligned_bytes::read_value(|bytes| object.read(bytes, file_offset))?;
+        return Ok(word.to_usize() as isize);
     }
 
     rel.as_rela()

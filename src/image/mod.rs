@@ -14,7 +14,7 @@ mod synthetic;
 mod traits;
 
 pub use crate::elf::SymbolLookup;
-pub use crate::segment::{ElfSegments, MappedRange};
+pub use crate::segment::ElfSegments;
 pub(crate) use core::CoreRuntime;
 pub use core::{ElfCore, ElfCoreRef, ElfModule, LoadedCore, Symbol};
 pub(crate) use elf::DynamicInfo;

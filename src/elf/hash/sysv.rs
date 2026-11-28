@@ -65,7 +65,7 @@ impl ElfHash {
             .checked_offset_from(segments.base())
             .ok_or(ParseDynamicError::AddressOverflow)?;
         let mut bytes = [0u8; HEADER_SIZE];
-        segments.read_bytes(addr, &mut bytes)?;
+        unsafe { segments.read_bytes(addr, &mut bytes)? };
         let header = ElfHashHeader::from_bytes(bytes);
 
         if header.nbucket == 0 {

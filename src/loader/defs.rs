@@ -4,7 +4,7 @@ use crate::{
     input::{ElfReader, ElfReaderExt},
     relocation::RelocationArch,
 };
-use core::mem::{MaybeUninit, align_of};
+use core::mem::align_of;
 
 pub(crate) struct ElfBuf {
     buf: AlignedBytes,
@@ -14,15 +14,8 @@ pub(crate) struct ElfBuf {
 pub(crate) fn read_ehdr<Arch: RelocationArch>(
     object: &(impl ElfReader + ?Sized),
 ) -> Result<ElfHeader<Arch::Layout>> {
-    let mut raw = MaybeUninit::<<Arch::Layout as ElfLayout>::Ehdr>::uninit();
-    let bytes = unsafe {
-        core::slice::from_raw_parts_mut(
-            raw.as_mut_ptr().cast::<u8>(),
-            <Arch::Layout as ElfLayout>::EHDR_SIZE,
-        )
-    };
-    object.read(bytes, 0)?;
-    let ehdr = ElfHeader::from_raw(unsafe { raw.assume_init() }, Arch::TARGET)?;
+    let raw = crate::aligned_bytes::read_value(|bytes| object.read(bytes, 0))?;
+    let ehdr = ElfHeader::from_raw(raw, Arch::TARGET)?;
     Arch::validate_e_flags(ehdr.e_flags())?;
     Ok(ehdr)
 }

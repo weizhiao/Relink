@@ -4,7 +4,6 @@
 //! Supply host symbols through [`crate::image::SyntheticModule`] and customize
 //! relocation through [`crate::observer::RelocationObserver`].
 
-mod defs;
 mod dynamic;
 mod helper;
 mod relocator;
@@ -22,7 +21,6 @@ pub use traits::{ObjectArch, RelocationArch};
 pub(crate) use traits::{Relocatable, RelocateArgs};
 
 pub use crate::observer::RelocationEvent;
-pub use defs::HandleResult;
 pub use relocator::Relocator;
 pub use run::RelocatorRun;
-pub use traits::{BindingMode, LookupOrder};
+pub use traits::{BindingMode, HandleResult, LookupOrder};

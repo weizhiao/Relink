@@ -1,5 +1,5 @@
 use crate::{
-    ByteRepr, Result,
+    ByteRepr, MmapError, Result,
     memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     os::ProtFlags,
 };
@@ -9,36 +9,11 @@ use core::{
     ptr::NonNull,
 };
 
-/// A mapped module-relative range owned by an ELF image.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MappedRange {
-    /// Range start, relative to the image base address.
-    pub offset: VmOffset,
-    /// Range length in bytes.
-    pub len: usize,
-}
-
-impl MappedRange {
-    #[inline]
-    const fn new(offset: VmOffset, len: usize) -> Self {
-        assert!(
-            offset.get().checked_add(len).is_some(),
-            "ELF mapped range overflowed",
-        );
-        Self { offset, len }
-    }
-
-    #[inline]
-    fn end(self) -> VmOffset {
-        VmOffset::new(self.offset.get() + self.len)
-    }
-}
-
 /// A contiguous ELF mapping at an offset relative to the image base.
 pub struct ElfSegments<R: RegionAccess = HostRegion> {
     base: VmAddr,
     region: MappedRegion<R>,
-    range: MappedRange,
+    range: Range<VmAddr>,
 }
 
 impl<R: RegionAccess> Debug for ElfSegments<R> {
@@ -49,54 +24,60 @@ impl<R: RegionAccess> Debug for ElfSegments<R> {
 
 impl<R: RegionAccess> Display for ElfSegments<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mapped = self.address_range();
         write!(
             f,
             "base: {}, range: {}..{} (+{} len 0x{:x})",
-            self.base, mapped.start, mapped.end, self.range.offset, self.range.len
+            self.base,
+            self.range.start,
+            self.range.end,
+            self.range.start.wrapping_offset_from(self.base),
+            self.region.len()
         )
     }
 }
 
 impl<R: RegionAccess> ElfSegments<R> {
     #[inline]
-    fn address_range(&self) -> Range<VmAddr> {
-        self.base + self.range.offset..self.base + self.range.end()
-    }
-
-    #[inline]
     pub(crate) fn contains_range(&self, addr: VmAddr, len: usize) -> bool {
-        addr.checked_offset_from(self.base + self.range.offset)
-            .and_then(|offset| offset.checked_add(len))
-            .is_some_and(|end| end.get() <= self.range.len)
+        self.range.start <= addr
+            && addr
+                .checked_add(VmOffset::new(len))
+                .is_some_and(|end| end <= self.range.end)
     }
 
     #[inline]
     fn region_offset(&self, addr: VmAddr) -> usize {
-        addr.wrapping_offset_from(self.region.addr()).get()
+        addr.wrapping_offset_from(self.range.start).get()
     }
 
-    /// Create a new contiguous [`ElfSegments`] instance whose mapped bytes begin
-    /// at the module-relative `offset`.
-    pub fn new(region: MappedRegion<R>, base: VmAddr, offset: VmOffset) -> Self {
-        let range = MappedRange::new(offset, region.len());
+    /// Describes a contiguous mapped region and the load base used for ELF offsets.
+    pub fn new(region: MappedRegion<R>, base: VmAddr) -> Self {
+        let start = region.addr();
+        let len = region.len();
+        assert!(
+            start.wrapping_offset_from(base).checked_add(len).is_some(),
+            "ELF mapped range overflowed"
+        );
+        let end = start
+            .checked_add(VmOffset::new(len))
+            .expect("ELF mapped address range overflowed");
         Self {
             base,
             region,
-            range,
+            range: start..end,
         }
     }
 
     /// Returns whether the mapping contains `addr`.
     #[inline]
     pub fn contains_addr(&self, addr: VmAddr) -> bool {
-        self.contains_range(addr, 1)
+        self.range.contains(&addr)
     }
 
-    /// Returns the offset and byte length of this mapping relative to the image base.
+    /// Returns the half-open range of runtime addresses covered by this mapping.
     #[inline]
-    pub const fn range(&self) -> MappedRange {
-        self.range
+    pub const fn range(&self) -> Range<VmAddr> {
+        self.range.start..self.range.end
     }
 
     #[inline]
@@ -128,8 +109,8 @@ impl<R: RegionAccess> ElfSegments<R> {
             return None;
         }
 
-        let relative = offset.checked_offset_from(self.range.offset)?;
-        let remaining = self.range.len.checked_sub(relative.get())?;
+        let addr = self.base + offset;
+        let remaining = self.range.end.checked_offset_from(addr)?.get();
         let byte_len = remaining - remaining % entry_size;
         if byte_len == 0 {
             return None;
@@ -163,12 +144,13 @@ impl<R: RegionAccess> ImageMemory for ElfSegments<R> {
     }
 
     fn range_at(&self, addr: VmAddr) -> Option<Range<VmAddr>> {
-        let mapped = self.address_range();
-        mapped.contains(&addr).then_some(mapped)
+        self.range.contains(&addr).then(|| self.range())
     }
 
     fn visit_ranges(&self, visit: &mut dyn FnMut(Range<VmAddr>)) {
-        visit(self.address_range());
+        if !self.range.is_empty() {
+            visit(self.range());
+        }
     }
 
     #[inline]
@@ -178,19 +160,25 @@ impl<R: RegionAccess> ImageMemory for ElfSegments<R> {
 
     #[inline]
     fn host_ptr_range(&self, addr: VmAddr, len: usize) -> Option<NonNull<u8>> {
-        debug_assert!(self.contains_range(addr, len));
+        if !self.contains_range(addr, len.max(1)) {
+            return None;
+        }
         unsafe { self.region.host_ptr(self.region_offset(addr)) }
     }
 
     #[inline]
-    fn read_bytes(&self, addr: VmAddr, dst: &mut [u8]) -> Result<()> {
-        debug_assert!(self.contains_range(addr, dst.len()));
+    unsafe fn read_bytes(&self, addr: VmAddr, dst: &mut [u8]) -> Result<()> {
+        if !self.contains_range(addr, dst.len()) {
+            return Err(MmapError::InvalidMappedRegionRange.into());
+        }
         unsafe { self.region.read_bytes(self.region_offset(addr), dst) }
     }
 
     #[inline]
-    fn write_bytes(&self, addr: VmAddr, src: &[u8]) -> Result<()> {
-        debug_assert!(self.contains_range(addr, src.len()));
+    unsafe fn write_bytes(&self, addr: VmAddr, src: &[u8]) -> Result<()> {
+        if !self.contains_range(addr, src.len()) {
+            return Err(MmapError::InvalidMappedRegionRange.into());
+        }
         unsafe { self.region.write_bytes(self.region_offset(addr), src) }
     }
 }

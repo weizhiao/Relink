@@ -11,7 +11,7 @@ mod thp;
 
 pub(crate) mod program;
 
-pub use space::{ElfSegments, MappedRange};
+pub use space::ElfSegments;
 
 pub(crate) use defs::{CopyRegion, ElfSegment, MemoryProtection, SegmentContent};
 pub(crate) use mapping::{populate_segments, protect_segments};

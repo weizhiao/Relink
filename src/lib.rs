@@ -211,7 +211,6 @@ compile_error!(
 
 mod aligned_bytes;
 pub mod arch;
-mod const_builder;
 pub mod elf;
 mod entity;
 pub mod error;

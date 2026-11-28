@@ -13,12 +13,16 @@ use crate::{
     observer::LifecycleHandlers,
     relocation::{LookupOrder, RelocationArch, SymbolRegistry, SymbolSearch},
     runtime::{CodeContext, CodeExecutor, Domain, DomainId},
-    segment::{ElfSegments, MappedRange},
+    segment::ElfSegments,
     sync::{OnceCell, Weak},
     tls::{ImageTlsState, TLS_GET_ADDR_SYMBOL, TlsModule, TlsResolver},
 };
 use alloc::boxed::Box;
-use core::{marker::PhantomData, ops::Deref, ptr::NonNull};
+use core::{
+    marker::PhantomData,
+    ops::{Deref, Range},
+    ptr::NonNull,
+};
 
 /// Stable runtime header shared by all [`ElfModule`] instantiations.
 #[repr(C)]
@@ -276,9 +280,9 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         &self.segments
     }
 
-    /// Returns the mapped range relative to the ELF image base.
+    /// Returns the half-open range of runtime addresses covered by the ELF mapping.
     #[inline]
-    pub const fn mapped_range(&self) -> MappedRange {
+    pub const fn mapped_range(&self) -> Range<VmAddr> {
         self.segments.range()
     }
 

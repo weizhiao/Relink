@@ -26,7 +26,7 @@ where
 {
     /// Sets object section layout groups for this loader run.
     pub fn with_object_section_groups(mut self, groups: SectionGroups) -> Self {
-        self.object_groups = Arc::new(groups);
+        self.object_groups = Some(Arc::new(groups));
         self
     }
 }
@@ -77,7 +77,7 @@ where
         let path = PathBuf::from(object.path());
         let source_id = object.source_id();
         let page_size = self.loader.mapper().page_size().bytes();
-        let object_groups = Arc::clone(&self.object_groups);
+        let object_groups = Arc::clone(self.object_groups.get_or_insert_with(Default::default));
         let observer = &mut self.observer;
         let mapper = self.loader.mapper();
         observer.on_before_object_load(BeforeObjectLoadEvent::new(

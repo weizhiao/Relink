@@ -1,8 +1,4 @@
-use core::{
-    mem::{MaybeUninit, size_of},
-    ops::Range,
-    ptr::NonNull,
-};
+use core::{mem::size_of, ops::Range, ptr::NonNull};
 
 use crate::{
     ByteRepr, Result,
@@ -15,6 +11,9 @@ use super::VmAddr;
 ///
 /// Implementations can be host-backed mmap regions, guest VM memory adapters,
 /// or any other backend that can service byte reads/writes for the range.
+/// Reading requires initialized, readable bytes without concurrent writes.
+/// Writing requires writable bytes and exclusive access. Buffers passed to
+/// byte-copy operations must be disjoint from the accessed range.
 pub trait RegionAccess: Send + Sync + 'static {
     /// Base VM address covered by this region.
     fn addr(&self) -> VmAddr;
@@ -59,12 +58,7 @@ pub trait RegionAccess: Send + Sync + 'static {
     /// The caller must ensure `offset..offset + size_of::<T>()` is inside this region.
     #[inline]
     unsafe fn read_unaligned_value<T: ByteRepr>(&self, offset: usize) -> Result<T> {
-        let mut value = MaybeUninit::<T>::uninit();
-        let bytes = unsafe {
-            core::slice::from_raw_parts_mut(value.as_mut_ptr().cast::<u8>(), size_of::<T>())
-        };
-        unsafe { self.read_bytes(offset, bytes)? };
-        Ok(unsafe { value.assume_init() })
+        crate::aligned_bytes::read_value(|bytes| unsafe { self.read_bytes(offset, bytes) })
     }
 
     /// Writes bytes without checking bounds.
@@ -159,14 +153,23 @@ pub trait ImageMemory: Send + Sync {
     /// Translates an image VM address into a host-accessible pointer.
     fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>>;
 
-    /// Translates an image VM address range into a host-accessible pointer.
+    /// Translates a mapped address and byte length into a host-accessible pointer.
+    /// Returns `None` when the requested range is outside the host-accessible mapping.
     fn host_ptr_range(&self, addr: VmAddr, len: usize) -> Option<NonNull<u8>>;
 
     /// Reads bytes from an image VM address.
-    fn read_bytes(&self, addr: VmAddr, dst: &mut [u8]) -> Result<()>;
+    ///
+    /// # Safety
+    /// The source range must be mapped, initialized, readable, and disjoint from
+    /// `dst`. The caller must prevent concurrent writes to that range.
+    unsafe fn read_bytes(&self, addr: VmAddr, dst: &mut [u8]) -> Result<()>;
 
     /// Writes bytes to an image VM address.
-    fn write_bytes(&self, addr: VmAddr, src: &[u8]) -> Result<()>;
+    ///
+    /// # Safety
+    /// The destination range must be mapped, writable, and disjoint from `src`.
+    /// The caller must ensure exclusive access to the destination bytes.
+    unsafe fn write_bytes(&self, addr: VmAddr, src: &[u8]) -> Result<()>;
 }
 
 /// Typed value helpers for image memory backends.
@@ -178,35 +181,30 @@ pub trait ImageMemoryExt: ImageMemory {
     ///
     /// # Safety
     /// The caller must ensure `addr..addr + size_of::<T>()` is backed by
-    /// readable image memory.
+    /// initialized, readable image memory with no concurrent writes.
     #[inline]
     unsafe fn read_value<T: ByteRepr>(&self, addr: VmAddr) -> Result<T> {
-        let mut value = MaybeUninit::<T>::uninit();
-        let bytes = unsafe {
-            core::slice::from_raw_parts_mut(value.as_mut_ptr().cast::<u8>(), size_of::<T>())
-        };
-        self.read_bytes(addr, bytes)?;
-        Ok(unsafe { value.assume_init() })
+        crate::aligned_bytes::read_value(|bytes| unsafe { self.read_bytes(addr, bytes) })
     }
 
     /// Writes a typed value to an image VM address.
     ///
     /// # Safety
     /// The caller must ensure `addr..addr + size_of::<T>()` is backed by
-    /// writable image memory.
+    /// writable image memory with exclusive access.
     #[inline]
     unsafe fn write_value<T: ByteRepr>(&self, addr: VmAddr, value: T) -> Result<()> {
         let bytes = unsafe {
             core::slice::from_raw_parts((&value as *const T).cast::<u8>(), size_of::<T>())
         };
-        self.write_bytes(addr, bytes)
+        unsafe { self.write_bytes(addr, bytes) }
     }
 
     /// Reads, updates, and writes a typed value.
     ///
     /// # Safety
     /// The caller must ensure `addr..addr + size_of::<T>()` is backed by
-    /// readable and writable image memory.
+    /// initialized, readable and writable image memory with exclusive access.
     #[inline]
     unsafe fn update_value<T: ByteRepr + Copy>(
         &self,
@@ -254,12 +252,12 @@ where
     }
 
     #[inline]
-    fn read_bytes(&self, addr: VmAddr, dst: &mut [u8]) -> Result<()> {
-        (**self).read_bytes(addr, dst)
+    unsafe fn read_bytes(&self, addr: VmAddr, dst: &mut [u8]) -> Result<()> {
+        unsafe { (**self).read_bytes(addr, dst) }
     }
 
     #[inline]
-    fn write_bytes(&self, addr: VmAddr, src: &[u8]) -> Result<()> {
-        (**self).write_bytes(addr, src)
+    unsafe fn write_bytes(&self, addr: VmAddr, src: &[u8]) -> Result<()> {
+        unsafe { (**self).write_bytes(addr, src) }
     }
 }

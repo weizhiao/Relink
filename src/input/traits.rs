@@ -1,8 +1,5 @@
 use alloc::vec::Vec;
-use core::{
-    mem,
-    mem::{MaybeUninit, align_of, size_of},
-};
+use core::mem::{align_of, size_of};
 
 use crate::{AlignedBytes, ByteRepr, IoError, ReadBoundsError, Result, try_cast_bytes};
 use alloc::boxed::Box;
@@ -33,7 +30,7 @@ pub trait ElfReader {
     /// Returns the total length in bytes of the ELF object source.
     fn len(&self) -> usize;
 
-    /// Reads data from the ELF object at the given offset into the provided buffer.
+    /// Fills the entire buffer starting at the given ELF offset, or returns an error.
     fn read(&self, buf: &mut [u8], offset: usize) -> Result<()>;
 
     /// Returns an identity derived from the opened source, not a separate path lookup.
@@ -108,30 +105,21 @@ pub(crate) trait ElfReaderExt: ElfReader {
         let byte_len = count
             .checked_mul(size_of::<T>())
             .ok_or(IoError::ReadBufferTooLarge)?;
-        let mut values = Vec::<MaybeUninit<T>>::new();
+        super::check_read_range(offset, byte_len, self.len())?;
+        let mut values = Vec::<T>::new();
         values
             .try_reserve_exact(count)
             .map_err(|_| IoError::OutOfMemory)?;
-        unsafe {
-            values.set_len(count);
-        }
+        // ByteRepr permits zero and every other byte pattern supplied by the reader.
+        values.resize_with(count, || unsafe { core::mem::zeroed() });
         let bytes =
             unsafe { core::slice::from_raw_parts_mut(values.as_mut_ptr().cast::<u8>(), byte_len) };
         self.read(bytes, offset)?;
-        Ok(unsafe { assume_init_vec(values) })
+        Ok(values)
     }
 }
 
 impl<T: ElfReader + ?Sized> ElfReaderExt for T {}
-
-#[inline]
-unsafe fn assume_init_vec<T>(mut values: Vec<MaybeUninit<T>>) -> Vec<T> {
-    let len = values.len();
-    let cap = values.capacity();
-    let ptr = values.as_mut_ptr().cast::<T>();
-    mem::forget(values);
-    unsafe { Vec::from_raw_parts(ptr, len, cap) }
-}
 
 /// Converts paths, byte buffers, and existing readers into an ELF reader.
 /// Existing readers pass through unchanged.

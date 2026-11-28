@@ -75,8 +75,6 @@ pub trait ElfLayout: 'static {
     const REL_MASK: usize;
     /// Bit shift used to extract relocation symbol bits from `r_info`.
     const REL_BIT: usize;
-    /// Size of this layout's ELF header.
-    const EHDR_SIZE: usize;
 
     /// Raw program-header type for this class, retained by shared runtime images.
     type Phdr: ElfPhdrRaw + Send + Sync;
@@ -106,7 +104,6 @@ impl ElfLayout for Elf32Layout {
     const CLASS: ElfClass = ElfClass::ELF32;
     const REL_MASK: usize = 0xFF;
     const REL_BIT: usize = 8;
-    const EHDR_SIZE: usize = core::mem::size_of::<Self::Ehdr>();
 
     type Phdr = elf::segment::Elf32_Phdr;
     type Shdr = elf::section::Elf32_Shdr;
@@ -127,7 +124,6 @@ impl ElfLayout for Elf64Layout {
     const CLASS: ElfClass = ElfClass::ELF64;
     const REL_MASK: usize = 0xFFFFFFFF;
     const REL_BIT: usize = 32;
-    const EHDR_SIZE: usize = core::mem::size_of::<Self::Ehdr>();
 
     type Phdr = elf::segment::Elf64_Phdr;
     type Shdr = elf::section::Elf64_Shdr;
@@ -146,5 +142,3 @@ pub type NativeElfLayout = Elf64Layout;
 #[cfg(not(target_pointer_width = "64"))]
 /// ELF layout matching the host pointer width.
 pub type NativeElfLayout = Elf32Layout;
-
-pub(crate) type ElfEhdr = <NativeElfLayout as ElfLayout>::Ehdr;

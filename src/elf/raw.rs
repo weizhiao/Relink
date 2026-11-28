@@ -56,7 +56,7 @@ impl ElfWord for u64 {
     }
 }
 
-pub trait ElfEhdrRaw: 'static {
+pub trait ElfEhdrRaw: ByteRepr + 'static {
     fn e_ident(&self) -> &[u8; elf::abi::EI_NIDENT];
     fn e_type(&self) -> u16;
     fn e_machine(&self) -> u16;
@@ -73,6 +73,9 @@ pub trait ElfEhdrRaw: 'static {
 
 macro_rules! impl_ehdr_raw {
     ($ty:ty) => {
+        // The ELF32 and ELF64 header layouts contain only integers and bytes, with no padding.
+        unsafe impl ByteRepr for $ty {}
+
         impl ElfEhdrRaw for $ty {
             #[inline]
             fn e_ident(&self) -> &[u8; elf::abi::EI_NIDENT] {

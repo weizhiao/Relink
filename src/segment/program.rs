@@ -80,7 +80,7 @@ where
         };
         let region = unsafe { mapper.create_space(layout, prot, init) }?;
         let base = region.addr() - min_vaddr;
-        let loaded = ElfSegments::new(region, base, min_vaddr);
+        let loaded = ElfSegments::new(region, base);
         if !use_file && let Some(thp) = &thp {
             thp.prepare_copy(phdrs, mapper, base);
         }
@@ -163,7 +163,7 @@ fn map_file_segments<M: Mmap + ?Sized>(
         Err(error) => return Err(error),
     };
     let base = region.addr() - min_vaddr;
-    let loaded = ElfSegments::new(region, base, min_vaddr);
+    let loaded = ElfSegments::new(region, base);
     if has_holes {
         // Protect the whole middle range once. BSS population and later segment
         // mappings restore their own pages, leaving only the gaps inaccessible.

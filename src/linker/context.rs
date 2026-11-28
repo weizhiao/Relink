@@ -362,7 +362,21 @@ where
         &mut self,
         lease: ModuleLease,
     ) -> core::result::Result<UnloadGroup<Meta, Arch>, LeaseError> {
+        self.release_with_pins(lease, &[])
+    }
+
+    pub(super) fn release_with_pins(
+        &mut self,
+        lease: ModuleLease,
+        pins: &[ModuleSlot],
+    ) -> core::result::Result<UnloadGroup<Meta, Arch>, LeaseError> {
         let slot = self.lease_slot(lease)?;
+        for &pin in pins {
+            self.committed
+                .module_mut(pin)
+                .expect("published pin must remain committed until rollback")
+                .unpin();
+        }
         let refs = self
             .committed
             .module_mut(slot)

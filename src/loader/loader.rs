@@ -1,15 +1,12 @@
 use super::run::LoaderRun;
 use crate::{
     arch::NativeArch,
-    const_builder::NoDrop,
     os::{DefaultMmap, Mmap, ThpPolicy},
     relocation::RelocationArch,
     runtime::Domain,
     tls::TlsResolver,
 };
-#[cfg(feature = "object")]
-use crate::{object::SectionGroups, sync::Arc};
-use core::{marker::PhantomData, mem::MaybeUninit, ptr};
+use core::marker::PhantomData;
 
 /// Reusable ELF loading configuration: architecture, memory mapper, and user-data type.
 ///
@@ -47,55 +44,6 @@ where
     Arch: RelocationArch,
     M: Mmap + Copy,
 {
-}
-
-struct LoaderFields<M> {
-    mapper: NoDrop<M>,
-    thp: Option<ThpPolicy>,
-    force_static_tls: bool,
-}
-
-impl<M> LoaderFields<M> {
-    #[inline]
-    const fn into_loader<D, Arch>(self) -> Loader<D, Arch, M>
-    where
-        D: Send + Sync + 'static,
-        Arch: RelocationArch,
-        M: Mmap,
-    {
-        let Self {
-            mapper,
-            thp,
-            force_static_tls,
-        } = self;
-        Loader {
-            mapper: mapper.into_inner(),
-            thp,
-            force_static_tls,
-            _marker: PhantomData,
-        }
-    }
-
-    #[inline]
-    const fn with_mapper<D, Arch, NewM>(self, mapper: NewM) -> Loader<D, Arch, NewM>
-    where
-        D: Send + Sync + 'static,
-        Arch: RelocationArch,
-        NewM: Mmap,
-        M: Copy,
-    {
-        let Self {
-            thp,
-            force_static_tls,
-            ..
-        } = self;
-        Loader {
-            mapper,
-            thp,
-            force_static_tls,
-            _marker: PhantomData,
-        }
-    }
 }
 
 impl<D, Arch, M> Clone for Loader<D, Arch, M>
@@ -143,19 +91,6 @@ where
     M: Mmap,
 {
     #[inline]
-    const fn into_fields(self) -> LoaderFields<M> {
-        let this = MaybeUninit::new(self);
-        let this = this.as_ptr();
-        unsafe {
-            LoaderFields {
-                mapper: NoDrop::read(ptr::addr_of!((*this).mapper)),
-                thp: ptr::read(ptr::addr_of!((*this).thp)),
-                force_static_tls: ptr::read(ptr::addr_of!((*this).force_static_tls)),
-            }
-        }
-    }
-
-    #[inline]
     pub(crate) const fn mapper(&self) -> &M {
         &self.mapper
     }
@@ -184,18 +119,23 @@ where
             buf: super::ElfBuf::new(),
             search_paths: None,
             #[cfg(feature = "object")]
-            object_groups: Arc::new(SectionGroups::default()),
+            object_groups: None,
         }
     }
 
     /// Sets the user-data type for dynamic images, initialized with `NewD::default()`.
     /// Populate it after parsing through
     /// [`LoadObserver::on_after_dynamic_load`](crate::observer::LoadObserver::on_after_dynamic_load).
-    pub const fn with_data<NewD>(self) -> Loader<NewD, Arch, M>
+    pub fn with_data<NewD>(self) -> Loader<NewD, Arch, M>
     where
         NewD: Default + Send + Sync + 'static,
     {
-        self.into_fields().into_loader()
+        Loader {
+            mapper: self.mapper,
+            thp: self.thp,
+            force_static_tls: self.force_static_tls,
+            _marker: PhantomData,
+        }
     }
 
     /// Configures transparent huge pages for mapped or copied ELF images.
@@ -232,22 +172,31 @@ where
 
     /// Returns a new loader with a custom `Mmap` backend.
     /// Segment and section layouts use the backend's [`Mmap::page_size`].
-    pub const fn with_mmap<NewMmap>(self, mapper: NewMmap) -> Loader<D, Arch, NewMmap>
+    pub fn with_mmap<NewMmap>(self, mapper: NewMmap) -> Loader<D, Arch, NewMmap>
     where
         NewMmap: Mmap,
-        M: Copy,
     {
-        self.into_fields().with_mapper(mapper)
+        Loader {
+            mapper,
+            thp: self.thp,
+            force_static_tls: self.force_static_tls,
+            _marker: PhantomData,
+        }
     }
 
     /// Selects the architecture used to validate ELF headers and apply relocations.
     ///
     /// For non-native execution, provide a matching executor through [`Domain`]
     /// when calling [`Loader::run`].
-    pub const fn with_arch<NewArch>(self) -> Loader<D, NewArch, M>
+    pub fn with_arch<NewArch>(self) -> Loader<D, NewArch, M>
     where
         NewArch: RelocationArch,
     {
-        self.into_fields().into_loader()
+        Loader {
+            mapper: self.mapper,
+            thp: self.thp,
+            force_static_tls: self.force_static_tls,
+            _marker: PhantomData,
+        }
     }
 }

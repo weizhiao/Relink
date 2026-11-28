@@ -177,11 +177,6 @@ impl ModuleId {
             generation,
         }
     }
-
-    #[inline]
-    pub(in crate::linker) const fn context(self) -> ContextId {
-        self.context
-    }
 }
 
 impl Display for ModuleId {

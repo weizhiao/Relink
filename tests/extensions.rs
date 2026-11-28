@@ -56,6 +56,54 @@ fn override_constructor_call() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn retry_failed_load_rollback() -> Result<()> {
+    use elf_loader::{
+        Error, LinkContext, Linker,
+        error::CustomError,
+        linker::SearchPathResolver,
+        observer::{DynamicRelocatedEvent, LinkerObserver, LoadObserver},
+    };
+
+    struct RejectInit;
+    impl LoadObserver for RejectInit {}
+    impl LinkerObserver for RejectInit {}
+    impl RelocationObserver for RejectInit {
+        fn on_dynamic_relocated<
+            D: Send + Sync + 'static,
+            R: RegionAccess,
+            T: TlsResolver<NativeArch>,
+        >(
+            &mut self,
+            event: &mut DynamicRelocatedEvent<'_, D, NativeArch, R, T>,
+        ) -> Result<()> {
+            event
+                .lifecycle_mut()
+                .set_init_hook(|_| Err(CustomError::message("init rejected").into()));
+            Ok(())
+        }
+    }
+
+    let path = compile(
+        "tests/fixtures/points.c",
+        "rollback.so",
+        &["-shared", "-fPIC"],
+    );
+    let linker = Linker::new().with_resolver(SearchPathResolver::new());
+    let mut run = linker.run().with_observer(RejectInit);
+    let mut owner = LinkContext::for_process();
+    let mut other = LinkContext::for_process();
+    let prepared = run.prepare_load(&mut owner, path)?;
+    let published = run.relocate(prepared)?.publish(&mut owner)?;
+    let published = published.rollback(&mut other).unwrap_err().acquisition;
+    let failed = published.initialize().unwrap_err();
+    let failed = failed.rollback(&mut other).unwrap_err().acquisition;
+    let error = failed.rollback(&mut owner)?;
+    assert!(matches!(error, Error::Custom(CustomError::Message(msg)) if msg == "init rejected"));
+    assert!(owner.is_empty());
+    Ok(())
+}
+
 #[cfg(feature = "lazy-binding")]
 #[test]
 fn late_host_symbol() -> Result<()> {

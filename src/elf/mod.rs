@@ -47,7 +47,6 @@ pub use symbol::{
     SymbolLookup, SymbolTable, SymbolTableView,
 };
 
-unsafe impl ByteRepr for layout::ElfEhdr {}
 unsafe impl<L: layout::ElfLayout> ByteRepr for dynamic::ElfDyn<L> {}
 unsafe impl ByteRepr for note::ElfNhdr {}
 unsafe impl<L: layout::ElfLayout> ByteRepr for phdr::ElfPhdr<L> {}

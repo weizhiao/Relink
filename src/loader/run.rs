@@ -50,7 +50,7 @@ pub struct LoaderRun<
     pub(super) buf: ElfBuf,
     pub(crate) search_paths: Option<&'a mut SearchPathPool>,
     #[cfg(feature = "object")]
-    pub(crate) object_groups: Arc<SectionGroups>,
+    pub(crate) object_groups: Option<Arc<SectionGroups>>,
 }
 
 impl<'a, Obs, D, Tls, Arch, M> LoaderRun<'a, Obs, D, Tls, Arch, M>
@@ -450,7 +450,6 @@ where
         let segments = ElfSegments::new(
             unsafe { self.loader.mapper().alias_space(mapped_addr, layout.len)? },
             load_bias,
-            min_vaddr,
         );
         let builder = ImageBuilder::<Tls, D, Arch, M::Region>::new(
             segments,

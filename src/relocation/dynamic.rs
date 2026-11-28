@@ -376,10 +376,11 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
                     && let Some((symbol, source)) = symdef.definition(&**helper.core)
                 {
                     let mut src = vec![0; len];
-                    source
-                        .memory()
-                        .read_bytes(source.resolve_symbol(symbol)?, &mut src)?;
-                    helper.memory().write_bytes(base + rel.r_offset(), &src)?;
+                    let source_addr = source.resolve_symbol(symbol)?;
+                    unsafe {
+                        source.memory().read_bytes(source_addr, &mut src)?;
+                        helper.memory().write_bytes(place, &src)?;
+                    }
                     helper.record_binding(effect);
                     continue;
                 }

@@ -39,6 +39,19 @@ pub(crate) fn try_cast_bytes<T: ByteRepr>(bytes: &[u8]) -> Option<&[T]> {
     }
 }
 
+/// Reads one plain-data value through an initialized, correctly aligned byte buffer.
+pub(crate) fn read_value<T: ByteRepr>(
+    read: impl FnOnce(&mut [u8]) -> crate::Result<()>,
+) -> crate::Result<T> {
+    // ByteRepr permits all bit patterns and has no uninitialized padding.
+    let mut value: T = unsafe { core::mem::zeroed() };
+    let bytes = unsafe {
+        core::slice::from_raw_parts_mut(core::ptr::from_mut(&mut value).cast(), size_of::<T>())
+    };
+    read(bytes)?;
+    Ok(value)
+}
+
 /// Types that can be safely viewed from arbitrary bytes.
 ///
 /// # Safety

@@ -1,11 +1,11 @@
 //! ELF headers, sections, and dependency metadata available before mapping.
 
 use crate::{
-    ParseDynamicError, ParsePhdrError, Result,
+    ParseDynamicError, ParsePhdrError, ParseShdrError, Result,
     arch::NativeArch,
     elf::{
-        ElfDyn, ElfDynamicTag, ElfHeader, ElfLayout, ElfPhdr, ElfProgramType, ElfSectionFlags,
-        ElfSectionId, ElfSectionType, ElfShdr, NativeElfLayout, parse_dynamic_entries,
+        ElfDyn, ElfDynamicTag, ElfHeader, ElfLayout, ElfPhdr, ElfProgramType, ElfSectionId,
+        ElfSectionType, ElfShdr, NativeElfLayout, parse_dynamic_entries,
     },
     image::{ModuleSearch, SearchPathPool},
     input::{ElfReader, ElfReaderExt, ModulePath, ModuleSourceId, Path, PathBuf},
@@ -13,19 +13,19 @@ use crate::{
     relocation::RelocationArch,
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{ffi::CStr, fmt, mem::size_of, num::NonZeroUsize};
+use core::{ffi::CStr, fmt, mem::size_of, num::NonZeroUsize, ops::Range};
 
-fn string_at(bytes: &[u8], offset: usize) -> &CStr {
-    CStr::from_bytes_until_nul(&bytes[offset..])
-        .expect("ELF string table entry is missing a NUL terminator")
+fn string_range(bytes: &[u8], offset: usize) -> Option<Range<usize>> {
+    let string = CStr::from_bytes_until_nul(bytes.get(offset..)?).ok()?;
+    Some(offset..offset + string.to_bytes().len())
 }
 
 struct DynamicScanParts {
     strtab: Box<[u8]>,
-    needed_libs: Box<[usize]>,
-    soname: Option<usize>,
-    rpath: Option<usize>,
-    runpath: Option<usize>,
+    needed_libs: Box<[Range<usize>]>,
+    soname: Option<Range<usize>>,
+    rpath: Option<Range<usize>>,
+    runpath: Option<Range<usize>>,
 }
 
 impl DynamicScanParts {
@@ -63,15 +63,25 @@ impl DynamicScanParts {
             .get();
         let strtab = object.read_to_vec(strtab_file_off, strtab_size)?;
 
+        let string = |offset| {
+            string_range(&strtab, offset).ok_or_else(|| {
+                ParseDynamicError::malformed_table(
+                    ElfDynamicTag::STRTAB,
+                    "invalid string reference",
+                )
+            })
+        };
         let needed_libs = parsed
             .needed_libs
             .into_iter()
-            .map(|offset| offset.get())
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-        let soname = parsed.soname_off.map(|offset| offset.get());
-        let rpath = parsed.rpath_off;
-        let runpath = parsed.runpath_off;
+            .map(|offset| string(offset.get()))
+            .collect::<core::result::Result<_, _>>()?;
+        let soname = parsed
+            .soname_off
+            .map(|offset| string(offset.get()))
+            .transpose()?;
+        let rpath = parsed.rpath_off.map(string).transpose()?;
+        let runpath = parsed.runpath_off.map(string).transpose()?;
 
         Ok(Self {
             strtab: strtab.into_boxed_slice(),
@@ -86,6 +96,7 @@ impl DynamicScanParts {
 struct SectionTable<L: ElfLayout = NativeElfLayout> {
     sections: Box<[ElfShdr<L>]>,
     shstrtab: Box<[u8]>,
+    names: Box<[Range<usize>]>,
 }
 
 impl<L: ElfLayout> SectionTable<L> {
@@ -99,27 +110,50 @@ impl<L: ElfLayout> SectionTable<L> {
         };
 
         let shdrs = object.read_to_vec::<ElfShdr<L>>(start, ehdr.e_shnum())?;
-        let shstrndx = ehdr.e_shstrndx();
-        let shstrtab = match shdrs.get(shstrndx) {
-            Some(shdr) if shdr.section_type() != ElfSectionType::NOBITS => {
+        let mut name_table = ehdr.e_shstrndx();
+        if name_table == usize::from(elf::abi::SHN_XINDEX) {
+            name_table = shdrs[0].sh_link() as usize;
+        }
+        let shstrtab = match name_table {
+            0 => Vec::new(),
+            index => {
+                let shdr = shdrs
+                    .get(index)
+                    .filter(|shdr| shdr.section_type() == ElfSectionType::STRTAB)
+                    .ok_or_else(|| ParseShdrError::malformed("invalid section name table"))?;
                 object.read_to_vec(shdr.sh_offset(), shdr.sh_size())?
             }
-            _ => return Ok(None),
         };
+        let names = shdrs
+            .iter()
+            .map(|header| match header.sh_name() {
+                0 => Ok(0..0),
+                offset => string_range(&shstrtab, offset as usize)
+                    .ok_or_else(|| ParseShdrError::malformed("invalid section name")),
+            })
+            .collect::<core::result::Result<_, _>>()?;
 
-        Ok(Some(SectionTable {
+        Ok(Some(Self {
             sections: shdrs.into_boxed_slice(),
             shstrtab: shstrtab.into_boxed_slice(),
+            names,
         }))
     }
 
-    fn section(&self, id: ElfSectionId) -> Option<ScannedSection<'_, L>> {
-        let header = self.sections.get(id.index())?;
-        Some(ScannedSection {
-            id,
-            name: string_at(&self.shstrtab, header.sh_name() as usize).to_bytes(),
-            header,
-        })
+    fn iter(table: Option<&Self>) -> impl ExactSizeIterator<Item = ScannedSection<'_, L>> {
+        let (headers, names, strings) = match table {
+            Some(table) => (&*table.sections, &*table.names, &*table.shstrtab),
+            None => (&[][..], &[][..], &[][..]),
+        };
+        headers
+            .iter()
+            .zip(names)
+            .enumerate()
+            .map(move |(index, (header, name))| ScannedSection {
+                id: ElfSectionId::new(index),
+                header,
+                name: &strings[name.clone()],
+            })
     }
 }
 
@@ -132,7 +166,7 @@ pub struct ScannedDynamic<Arch: RelocationArch = NativeArch> {
     interp: Option<Box<[u8]>>,
     strtab: Box<[u8]>,
     section_table: Option<SectionTable<Arch::Layout>>,
-    needed_libs: Box<[usize]>,
+    needed_libs: Box<[Range<usize>]>,
     reader: Box<dyn ElfReader + 'static>,
 }
 
@@ -175,41 +209,6 @@ impl<L: ElfLayout> Clone for ScannedSection<'_, L> {
         *self
     }
 }
-
-/// Iterator over the usable section-table entries of a scanned module.
-pub struct ScannedSections<'a, L: ElfLayout = NativeElfLayout> {
-    table: Option<&'a SectionTable<L>>,
-    index: usize,
-}
-
-impl<'a, L: ElfLayout> ScannedSections<'a, L> {
-    #[inline]
-    fn new(table: Option<&'a SectionTable<L>>) -> Self {
-        Self { table, index: 0 }
-    }
-
-    fn allocated(self) -> impl Iterator<Item = ScannedSection<'a, L>> {
-        self.filter(|section| section.header().flags().contains(ElfSectionFlags::ALLOC))
-    }
-}
-
-impl<'a, L: ElfLayout> Iterator for ScannedSections<'a, L> {
-    type Item = ScannedSection<'a, L>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let section = self.table?.section(ElfSectionId::new(self.index))?;
-        self.index += 1;
-        Some(section)
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = self.table.map_or(0, |table| table.sections.len());
-        let remaining = len - self.index;
-        (remaining, Some(remaining))
-    }
-}
-
-impl<L: ElfLayout> ExactSizeIterator for ScannedSections<'_, L> {}
 
 impl<'a, L: ElfLayout> ScannedSection<'a, L> {
     /// Returns the stable section id.
@@ -386,17 +385,11 @@ impl<Arch: RelocationArch> ScannedElf<Arch> {
 
     /// Iterates over all scanned sections together with stable ids.
     #[inline]
-    pub fn sections(&self) -> ScannedSections<'_, Arch::Layout> {
-        match self {
-            Self::Dynamic(image) => image.sections(),
-            Self::StaticExec(image) => image.sections(),
-        }
-    }
-
-    /// Iterates over sections that contribute to the loaded memory image.
-    #[inline]
-    pub fn alloc_sections(&self) -> impl Iterator<Item = ScannedSection<'_, Arch::Layout>> {
-        self.sections().allocated()
+    pub fn sections(&self) -> impl ExactSizeIterator<Item = ScannedSection<'_, Arch::Layout>> {
+        SectionTable::iter(match self {
+            Self::Dynamic(image) => image.section_table.as_ref(),
+            Self::StaticExec(image) => image.section_table.as_ref(),
+        })
     }
 }
 
@@ -421,9 +414,9 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
             runpath,
         } = DynamicScanParts::new(reader.as_mut(), &phdrs)?;
         let section_table = SectionTable::new(reader.as_mut(), &ehdr)?;
-        let soname = soname.map(|offset| string_at(&strtab, offset).to_bytes());
-        let runpath = runpath.map(|offset| string_at(&strtab, offset).to_bytes());
-        let rpath = rpath.map(|offset| string_at(&strtab, offset).to_bytes());
+        let soname = soname.map(|range| &strtab[range]);
+        let runpath = runpath.map(|range| &strtab[range]);
+        let rpath = rpath.map(|range| &strtab[range]);
         let path = ModulePath::try_from(path).map_err(|_| crate::IoError::NullByteInPath)?;
         let search = match search_paths {
             Some(paths) => paths.module_search(path, soname, runpath, rpath),
@@ -495,7 +488,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
     pub fn needed_lib(&self, index: usize) -> Option<&[u8]> {
         self.needed_libs
             .get(index)
-            .map(|offset| string_at(&self.strtab, *offset).to_bytes())
+            .map(|range| &self.strtab[range.clone()])
     }
 
     /// Iterates over the `DT_NEEDED` entries.
@@ -503,7 +496,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
     pub fn needed_libs(&self) -> impl ExactSizeIterator<Item = &[u8]> + '_ {
         self.needed_libs
             .iter()
-            .map(|offset| string_at(&self.strtab, *offset).to_bytes())
+            .map(|range| &self.strtab[range.clone()])
     }
 
     /// Returns whether the module exposes a usable section-table view.
@@ -523,30 +516,13 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
     /// Returns one scanned section by id.
     #[inline]
     pub fn section(&self, id: ElfSectionId) -> Option<ScannedSection<'_, Arch::Layout>> {
-        self.section_table.as_ref()?.section(id)
+        self.sections().nth(id.index())
     }
 
     /// Iterates over all scanned sections together with stable ids.
     #[inline]
-    pub fn sections(&self) -> ScannedSections<'_, Arch::Layout> {
-        ScannedSections::new(self.section_table.as_ref())
-    }
-
-    /// Iterates over sections that contribute to the loaded memory image.
-    #[inline]
-    pub fn alloc_sections(&self) -> impl Iterator<Item = ScannedSection<'_, Arch::Layout>> {
-        self.sections().allocated()
-    }
-
-    /// Iterates over retained relocation sections emitted into the section table.
-    #[inline]
-    pub fn relocation_sections(&self) -> impl Iterator<Item = ScannedSection<'_, Arch::Layout>> {
-        self.sections().filter(|section| {
-            matches!(
-                section.header().section_type(),
-                ElfSectionType::REL | ElfSectionType::RELA
-            )
-        })
+    pub fn sections(&self) -> impl ExactSizeIterator<Item = ScannedSection<'_, Arch::Layout>> {
+        SectionTable::iter(self.section_table.as_ref())
     }
 
     pub(crate) fn into_load_parts(self) -> ScannedDynamicLoadParts<Arch> {
@@ -632,19 +608,13 @@ impl<Arch: RelocationArch> ScannedExec<Arch> {
     /// Returns one scanned section by id.
     #[inline]
     pub fn section(&self, id: ElfSectionId) -> Option<ScannedSection<'_, Arch::Layout>> {
-        self.section_table.as_ref()?.section(id)
+        self.sections().nth(id.index())
     }
 
     /// Iterates over all scanned sections together with stable ids.
     #[inline]
-    pub fn sections(&self) -> ScannedSections<'_, Arch::Layout> {
-        ScannedSections::new(self.section_table.as_ref())
-    }
-
-    /// Iterates over sections that contribute to the loaded memory image.
-    #[inline]
-    pub fn alloc_sections(&self) -> impl Iterator<Item = ScannedSection<'_, Arch::Layout>> {
-        self.sections().allocated()
+    pub fn sections(&self) -> impl ExactSizeIterator<Item = ScannedSection<'_, Arch::Layout>> {
+        SectionTable::iter(self.section_table.as_ref())
     }
 }
 

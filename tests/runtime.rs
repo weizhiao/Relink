@@ -24,9 +24,10 @@ fn load_plugin() -> Result<()> {
     let plugin = linker.run().load(&mut context, plugin)?;
     let module = context.module(plugin.root())?;
     let score = unsafe { module.get::<extern "C" fn() -> i32>("score") }?.unwrap();
-    let caller = context
-        .address_at(VmAddr::from_ptr(score.into_raw()))
-        .unwrap();
+    let addr = VmAddr::from_ptr(score.into_raw());
+    let range = module.memory().range_at(addr).unwrap();
+    assert!(module.memory().host_ptr_range(range.end, 1).is_none());
+    let caller = context.address_at(addr).unwrap();
     let mut target = LinkContext::for_process();
     let imported = target.import(&context, plugin.root())?;
     assert!(module.ptr_eq(target.module(imported.id())?));
@@ -63,6 +64,15 @@ fn interpreter_path() -> Result<()> {
     let loader = Loader::new();
     let mut run = loader.run(Domain::native(AddressSpaceId::PROCESS));
     let scanned = run.scan(path.clone())?;
+    assert_eq!(
+        scanned.sections().len(),
+        scanned.section_headers().unwrap().len()
+    );
+    let interp = scanned
+        .sections()
+        .find(|section| section.name() == b".interp")
+        .unwrap();
+    assert_eq!(scanned.section(interp.id()).unwrap().name(), b".interp");
     let mapped = run.load(path)?;
     assert_eq!(scanned.interp(), Some(b"/runtime/\xff".as_slice()));
     assert_eq!(mapped.interp(), scanned.interp());

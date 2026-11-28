@@ -4,7 +4,7 @@ use super::{
     resolve::ResolveContext,
     resolver::KeyResolver,
     session::{CommitResult, LoadSession, PublishSession, ResolveSession},
-    storage::{ContextId, ModuleId, ModuleKey, ModuleLease, ModuleSlot},
+    storage::{ContextId, LeaseError, ModuleId, ModuleKey, ModuleLease, ModuleSlot},
 };
 use crate::{
     ByteRepr, Error, LinkContextError, LinkerError, Loader, Result,
@@ -109,7 +109,7 @@ where
         let published = relocated.publish(context)?;
         match published.initialize() {
             Ok(result) => Ok(result),
-            Err(failed) => Err(failed.rollback(context)),
+            Err(failed) => Err(failed.rollback(context)?),
         }
     }
 
@@ -469,34 +469,30 @@ impl<Arch: RelocationArch> PublishedLoad<Arch> {
             .iter()
             .try_for_each(|module| module.initialize());
         if let Err(error) = result {
-            return Err(FailedLoad { error, load: self });
+            return Err(FailedLoad {
+                error: Box::new(error),
+                load: self,
+            });
         }
         Ok(LoadResult::new(self.lease, self.modules))
     }
 
     /// Releases this publication and finalizes modules that become unreachable.
+    /// A rejecting context returns the publication so rollback can be retried.
     pub fn rollback<Meta, Tls: TlsResolver<Arch>>(
         self,
         context: &mut LinkContext<Meta, Arch, Tls>,
-    ) -> Result<()> {
-        let expected = self.lease.id().context();
-        if context.context_id() != expected {
-            return Err(LinkerError::context(LinkContextError::ContextMismatch {
-                expected,
-                actual: context.context_id(),
-            })
-            .into());
+    ) -> core::result::Result<(), LeaseError<Self>> {
+        match context.release_with_pins(self.lease, &self.pins) {
+            Ok(_) => Ok(()),
+            Err(rejected) => Err(LeaseError {
+                error: rejected.error,
+                acquisition: Self {
+                    lease: rejected.acquisition,
+                    ..self
+                },
+            }),
         }
-
-        for slot in self.pins.iter().copied() {
-            context
-                .committed
-                .module_mut(slot)
-                .expect("published pin must remain committed until rollback")
-                .unpin();
-        }
-        context.release(self.lease)?;
-        Ok(())
     }
 }
 
@@ -506,7 +502,7 @@ impl<Arch: RelocationArch> PublishedLoad<Arch> {
 /// initialization failure as fatal may inspect the error and terminate.
 #[must_use = "a failed load must be rolled back or treated as fatal"]
 pub struct FailedLoad<Arch: RelocationArch = NativeArch> {
-    error: Error,
+    error: Box<Error>,
     load: PublishedLoad<Arch>,
 }
 
@@ -526,14 +522,21 @@ impl<Arch: RelocationArch> FailedLoad<Arch> {
         &self.error
     }
 
-    /// Removes the published modules and returns the initialization error.
+    /// Rolls back the publication and returns the original initialization error.
+    /// A rejecting context returns the failed load, including its initialization error.
     pub fn rollback<Meta, Tls: TlsResolver<Arch>>(
         self,
         context: &mut LinkContext<Meta, Arch, Tls>,
-    ) -> Error {
+    ) -> core::result::Result<Error, LeaseError<Self>> {
         match self.load.rollback(context) {
-            Ok(()) => self.error,
-            Err(error) => error,
+            Ok(()) => Ok(*self.error),
+            Err(rejected) => Err(LeaseError {
+                error: rejected.error,
+                acquisition: Self {
+                    error: self.error,
+                    load: rejected.acquisition,
+                },
+            }),
         }
     }
 }

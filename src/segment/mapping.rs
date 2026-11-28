@@ -91,10 +91,13 @@ impl ElfSegment {
         space: &ElfSegments<R>,
     ) -> Result<()> {
         let copy = |region: &CopyRegion| -> Result<()> {
+            if region.len == 0 {
+                return Ok(());
+            }
             let addr = space.base() + self.segment_offset(region.segment_offset);
             let dst = space
                 .host_ptr_range(addr, region.len)
-                .expect("segment copy target is not host-accessible");
+                .ok_or(crate::MmapError::HostPointerUnavailable)?;
             let dst = unsafe { core::slice::from_raw_parts_mut(dst.as_ptr(), region.len) };
             object.read(dst, region.file_offset)
         };
