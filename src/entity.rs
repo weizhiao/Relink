@@ -1,6 +1,5 @@
-use alloc::vec::{IntoIter, Vec};
+use alloc::vec::Vec;
 use core::{
-    iter::Enumerate,
     marker::PhantomData,
     ops::{Index, IndexMut},
 };
@@ -58,46 +57,6 @@ impl<K: EntityRef> FromIterator<K> for EntitySet<K> {
     }
 }
 
-macro_rules! entity_ref {
-    ($name:ident) => {
-        entity_ref!(@impl $name, pub(crate));
-    };
-    ($name:ident, $vis:vis) => {
-        entity_ref!(@impl $name, $vis);
-    };
-    (@impl $name:ident, $vis:vis) => {
-        impl $name {
-            /// Creates a new typed entity reference from a zero-based index.
-            #[inline]
-            #[allow(dead_code)]
-            $vis const fn new(index: usize) -> Self {
-                Self(index)
-            }
-
-            /// Returns the zero-based index represented by this reference.
-            #[inline]
-            #[allow(dead_code)]
-            $vis const fn index(self) -> usize {
-                self.0
-            }
-        }
-
-        impl $crate::entity::EntityRef for $name {
-            #[inline]
-            fn new(index: usize) -> Self {
-                Self(index)
-            }
-
-            #[inline]
-            fn index(self) -> usize {
-                self.0
-            }
-        }
-    };
-}
-
-pub(crate) use entity_ref;
-
 /// A dense, append-only primary map keyed by typed entity references.
 ///
 /// This is a small self-contained equivalent of the arena style used in
@@ -105,11 +64,6 @@ pub(crate) use entity_ref;
 #[derive(Debug, Clone)]
 pub(crate) struct PrimaryMap<K, V> {
     values: Vec<V>,
-    marker: PhantomData<fn() -> K>,
-}
-
-pub(crate) struct PrimaryMapIntoIter<K, V> {
-    values: Enumerate<IntoIter<V>>,
     marker: PhantomData<fn() -> K>,
 }
 
@@ -135,20 +89,6 @@ where
         key
     }
 
-    /// Transforms every value while preserving the same dense key space.
-    #[inline]
-    pub(crate) fn map_values<U>(self, mut f: impl FnMut(K, V) -> U) -> PrimaryMap<K, U> {
-        PrimaryMap {
-            values: self
-                .values
-                .into_iter()
-                .enumerate()
-                .map(|(index, value)| f(K::new(index), value))
-                .collect(),
-            marker: PhantomData,
-        }
-    }
-
     /// Returns one stored value by id.
     #[inline]
     pub(crate) fn get(&self, key: K) -> Option<&V> {
@@ -162,49 +102,13 @@ where
     }
 
     /// Iterates over ids and values together.
+    #[cfg(feature = "object")]
     #[inline]
     pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = (K, &V)> + ExactSizeIterator {
         self.values
             .iter()
             .enumerate()
             .map(|(index, value)| (K::new(index), value))
-    }
-}
-
-impl<K, V> Iterator for PrimaryMapIntoIter<K, V>
-where
-    K: EntityRef,
-{
-    type Item = (K, V);
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        self.values
-            .next()
-            .map(|(index, value)| (K::new(index), value))
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.values.size_hint()
-    }
-}
-
-impl<K, V> ExactSizeIterator for PrimaryMapIntoIter<K, V> where K: EntityRef {}
-
-impl<K, V> IntoIterator for PrimaryMap<K, V>
-where
-    K: EntityRef,
-{
-    type Item = (K, V);
-    type IntoIter = PrimaryMapIntoIter<K, V>;
-
-    #[inline]
-    fn into_iter(self) -> Self::IntoIter {
-        PrimaryMapIntoIter {
-            values: self.values.into_iter().enumerate(),
-            marker: PhantomData,
-        }
     }
 }
 
@@ -266,12 +170,6 @@ where
         self.values[index].replace(value)
     }
 
-    /// Removes side data for `key`, returning it if present.
-    #[inline]
-    pub(crate) fn remove(&mut self, key: K) -> Option<V> {
-        self.values.get_mut(key.index()).and_then(Option::take)
-    }
-
     /// Returns side data for `key`.
     #[inline]
     pub(crate) fn get(&self, key: K) -> Option<&V> {
@@ -282,15 +180,6 @@ where
     #[inline]
     pub(crate) fn get_mut(&mut self, key: K) -> Option<&mut V> {
         self.values.get_mut(key.index()).and_then(Option::as_mut)
-    }
-
-    /// Iterates over ids and present side-data values together.
-    #[inline]
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (K, &V)> {
-        self.values
-            .iter()
-            .enumerate()
-            .filter_map(|(index, value)| value.as_ref().map(|value| (K::new(index), value)))
     }
 }
 

@@ -1,9 +1,8 @@
 use super::{
     context::LinkContext,
     driver::{Linker, LoadResult},
-    resolve::LoadResolveContext,
+    resolve::ResolveContext,
     resolver::KeyResolver,
-    scan::{LinkPipeline, MappedRuntimeMemory},
     session::{CommitResult, LoadSession, PublishSession, ResolveSession},
     storage::{ContextId, ModuleId, ModuleKey, ModuleLease, ModuleSlot},
 };
@@ -27,68 +26,30 @@ use core::{fmt, mem};
 ///
 /// A [`Linker`] owns reusable configuration. `LinkerRun` owns scratch storage
 /// used while resolving and relocating one sequence of loads.
-pub struct LinkerRun<
-    'run,
-    'pipe,
-    Arch: RelocationArch,
-    L,
-    R,
-    RelocBinder,
-    Tls: TlsResolver<Arch>,
-    Obs = (),
-> {
+pub struct LinkerRun<'run, Arch: RelocationArch, L, R, RelocBinder, Obs = ()> {
     pub(super) linker: &'run Linker<Arch, L, R, RelocBinder>,
-    pub(super) pipeline: LinkPipeline<'pipe, Arch, Tls>,
     pub(super) observer: Obs,
     pub(super) caller: Option<ModuleId>,
     pub(super) lookup_order: LookupOrder,
     pub(super) scratch_order: Vec<ModuleSlot>,
 }
 
-impl<'run, 'pipe, Arch, L, R, RelocBinder, Tls, Obs>
-    LinkerRun<'run, 'pipe, Arch, L, R, RelocBinder, Tls, Obs>
+impl<'run, Arch, L, R, RelocBinder, Obs> LinkerRun<'run, Arch, L, R, RelocBinder, Obs>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
 {
     /// Sets the observer used by this linker run.
     #[inline]
     pub fn with_observer<NewObs>(
         self,
         observer: NewObs,
-    ) -> LinkerRun<'run, 'pipe, Arch, L, R, RelocBinder, Tls, NewObs> {
+    ) -> LinkerRun<'run, Arch, L, R, RelocBinder, NewObs> {
         LinkerRun {
             linker: self.linker,
-            pipeline: self.pipeline,
             observer,
             caller: self.caller,
             lookup_order: self.lookup_order,
             scratch_order: self.scratch_order,
-        }
-    }
-
-    /// Reconfigures the scan-first pipeline for this run.
-    #[inline]
-    pub fn map_pipeline(
-        self,
-        configure: impl FnOnce(LinkPipeline<'pipe, Arch, Tls>) -> LinkPipeline<'pipe, Arch, Tls>,
-    ) -> Self {
-        let Self {
-            linker,
-            pipeline,
-            observer,
-            caller,
-            lookup_order,
-            scratch_order,
-        } = self;
-
-        Self {
-            linker,
-            pipeline: configure(pipeline),
-            observer,
-            caller,
-            lookup_order,
-            scratch_order,
         }
     }
 
@@ -107,15 +68,14 @@ where
     }
 }
 
-impl<'run, 'pipe, D, Tls, Arch, M, Resolver, RelocBinder, Obs>
-    LinkerRun<'run, 'pipe, Arch, Loader<D, Arch, M>, Resolver, RelocBinder, Tls, Obs>
+impl<'run, D, Arch, M, Resolver, RelocBinder, Obs>
+    LinkerRun<'run, Arch, Loader<D, Arch, M>, Resolver, RelocBinder, Obs>
 where
     D: Default + Send + Sync + 'static,
-    Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
     ElfRelType<Arch>: ByteRepr,
-    Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch> + RelocationObserver<Arch>,
+    Obs: LoadObserver<D, Arch> + RelocationObserver<Arch>,
     Resolver: KeyResolver<Arch>,
     RelocBinder: LazyBinder<Arch> + Clone,
 {
@@ -123,25 +83,27 @@ where
     ///
     /// Initialization failure is rolled back before the error is returned. Use
     /// the staged API when the caller needs to choose another failure policy.
-    pub fn load<Meta>(
+    pub fn load<Meta, Tls: TlsResolver<Arch>>(
         &mut self,
         context: &mut LinkContext<Meta, Arch, Tls>,
         root: Resolver::Root,
     ) -> Result<LoadResult>
     where
         Meta: Default,
+        Obs: LinkerObserver<D, Arch, M::Region, Tls>,
     {
         let prepared = self.prepare_load(context, root)?;
         self.finish_load(context, prepared)
     }
 
-    pub(in crate::linker) fn finish_load<Meta>(
+    fn finish_load<Meta, Tls: TlsResolver<Arch>>(
         &mut self,
         context: &mut LinkContext<Meta, Arch, Tls>,
         prepared: PreparedLoad<D, Arch, M::Region, Tls>,
     ) -> Result<LoadResult>
     where
         Meta: Default,
+        Obs: LinkerObserver<D, Arch, M::Region, Tls>,
     {
         let relocated = self.relocate(prepared)?;
         let published = relocated.publish(context)?;
@@ -152,7 +114,7 @@ where
     }
 
     /// Resolves `root` and returns its committed identity without loading it.
-    pub fn resolve_committed<Meta>(
+    pub fn resolve_committed<Meta, Tls: TlsResolver<Arch>>(
         &mut self,
         context: &mut LinkContext<Meta, Arch, Tls>,
         root: Resolver::Root,
@@ -174,11 +136,10 @@ where
         }
 
         let slot = {
-            let mut session: ResolveSession<RawDynamic<D, Arch, M::Region, Tls>, Arch> =
+            let mut session: ResolveSession<D, Arch, M::Region, Tls> =
                 ResolveSession::new(context.committed.reservation_returns());
             let tokens = context.search_paths.tokens();
-            let resolve_context =
-                LoadResolveContext::new(&mut context.committed, &mut session, tokens);
+            let resolve_context = ResolveContext::new(&mut context.committed, &mut session, tokens);
             resolve_context.resolve_committed_root(root, caller, &self.linker.resolver)?
         };
         let Some(slot) = slot else {
@@ -189,7 +150,7 @@ where
         Ok(Some(id))
     }
 
-    pub(in crate::linker) fn visible_root<Meta>(
+    fn visible_root<Meta, Tls: TlsResolver<Arch>>(
         &self,
         context: &LinkContext<Meta, Arch, Tls>,
         key: &[u8],
@@ -203,7 +164,7 @@ where
     }
 
     /// Resolves and maps one module group without executing target code.
-    pub fn prepare_load<Meta>(
+    pub fn prepare_load<Meta, Tls: TlsResolver<Arch>>(
         &mut self,
         context: &mut LinkContext<Meta, Arch, Tls>,
         root: Resolver::Root,
@@ -225,17 +186,16 @@ where
             .run(context.domain.clone())
             .with_search_path_pool(&mut context.search_paths)
             .with_observer(&mut self.observer);
-        let mut resolve_context =
-            LoadResolveContext::new(&mut context.committed, &mut session, tokens);
+        let mut resolve_context = ResolveContext::new(&mut context.committed, &mut session, tokens);
         let root =
             resolve_context.resolve_root(root, key, caller, &mut loader, &linker.resolver)?;
-        Ok(PreparedLoad::new(root, session, None, context))
+        Ok(PreparedLoad::new(root, session, context))
     }
 
     /// Loads, commits, and initializes a pre-mapped root dynamic image.
     ///
     /// Initialization failure is rolled back before the error is returned.
-    pub fn load_mapped<Meta>(
+    pub fn load_mapped<Meta, Tls: TlsResolver<Arch>>(
         &mut self,
         context: &mut LinkContext<Meta, Arch, Tls>,
         key: ModuleKey,
@@ -243,13 +203,14 @@ where
     ) -> Result<LoadResult>
     where
         Meta: Default,
+        Obs: LinkerObserver<D, Arch, M::Region, Tls>,
     {
         let prepared = self.prepare_mapped(context, key, raw)?;
         self.finish_load(context, prepared)
     }
 
     /// Resolves dependencies for a pre-mapped root without relocating it.
-    pub fn prepare_mapped<Meta>(
+    pub fn prepare_mapped<Meta, Tls: TlsResolver<Arch>>(
         &mut self,
         context: &mut LinkContext<Meta, Arch, Tls>,
         key: ModuleKey,
@@ -270,7 +231,7 @@ where
         if let Some(root) = context.committed.module_for_source(source) {
             session.track(root, context.committed.generation(root));
             session.bind_key(key, root);
-            return Ok(PreparedLoad::new(root, session, None, context));
+            return Ok(PreparedLoad::new(root, session, context));
         }
         let tokens = context.search_paths.tokens();
         let mut loader = linker
@@ -278,24 +239,25 @@ where
             .run(context.domain.clone())
             .with_search_path_pool(&mut context.search_paths)
             .with_observer(&mut self.observer);
-        let mut resolve_context =
-            LoadResolveContext::new(&mut context.committed, &mut session, tokens);
+        let mut resolve_context = ResolveContext::new(&mut context.committed, &mut session, tokens);
         let root = resolve_context.stage_dynamic(key, raw, caller);
         resolve_context.resolve_graph(root, &mut loader, &linker.resolver)?;
-        Ok(PreparedLoad::new(root, session, None, context))
+        Ok(PreparedLoad::new(root, session, context))
     }
 
     /// Relocates a prepared module group without borrowing its link context.
-    pub fn relocate(
+    pub fn relocate<Tls: TlsResolver<Arch>>(
         &mut self,
         prepared: PreparedLoad<D, Arch, M::Region, Tls>,
-    ) -> Result<RelocatedLoad<Arch>> {
+    ) -> Result<RelocatedLoad<Arch>>
+    where
+        Obs: LinkerObserver<D, Arch, M::Region, Tls>,
+    {
         let PreparedLoad {
             context,
             root: root_slot,
             session,
             relocation,
-            mapped_runtime,
         } = prepared;
 
         let mut session = LoadSession::from_resolve(session);
@@ -310,10 +272,6 @@ where
             )?;
         }
 
-        if let Some(mapped_runtime) = mapped_runtime.as_ref() {
-            mapped_runtime.protect()?;
-        }
-
         Ok(RelocatedLoad {
             context,
             root: root_slot,
@@ -321,14 +279,17 @@ where
         })
     }
 
-    fn relocate_pending_modules(
+    fn relocate_pending_modules<Tls: TlsResolver<Arch>>(
         &mut self,
         root: ModuleSlot,
         local: &ModuleScope<Arch>,
         global: &GlobalScope<Arch>,
         symbols: &Arc<SymbolRegistry<Arch>>,
         session: &mut LoadSession<D, Arch, M::Region, Tls>,
-    ) -> Result<()> {
+    ) -> Result<()>
+    where
+        Obs: LinkerObserver<D, Arch, M::Region, Tls>,
+    {
         let mut order = mem::take(&mut self.scratch_order);
         session.build_lifecycle_order(root, &mut order);
         let retained = session.build_retained_scopes(root, local, &order);
@@ -376,9 +337,8 @@ pub struct PreparedLoad<
 > {
     context: ContextId,
     root: ModuleSlot,
-    session: ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch>,
+    session: ResolveSession<D, Arch, R, Tls>,
     relocation: Option<PreparedRelocation<Arch>>,
-    mapped_runtime: Option<MappedRuntimeMemory<R>>,
 }
 
 struct PreparedRelocation<Arch: RelocationArch> {
@@ -390,20 +350,19 @@ struct PreparedRelocation<Arch: RelocationArch> {
 impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     PreparedLoad<D, Arch, R, Tls>
 {
-    pub(in crate::linker) fn visible<Meta>(
+    fn visible<Meta>(
         context: &LinkContext<Meta, Arch, Tls>,
         key: impl AsRef<[u8]>,
     ) -> Option<Self> {
         let root = context.committed.module_for_key(key)?;
         let mut session = ResolveSession::new(context.committed.reservation_returns());
         session.track(root, context.committed.generation(root));
-        Some(Self::new(root, session, None, context))
+        Some(Self::new(root, session, context))
     }
 
-    pub(in crate::linker) fn new<Meta>(
+    fn new<Meta>(
         root: ModuleSlot,
-        session: ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch>,
-        mapped_runtime: Option<MappedRuntimeMemory<R>>,
+        session: ResolveSession<D, Arch, R, Tls>,
         context: &LinkContext<Meta, Arch, Tls>,
     ) -> Self {
         let relocation = if session.pending_is_empty() {
@@ -421,7 +380,6 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             root,
             session,
             relocation,
-            mapped_runtime,
         }
     }
 }

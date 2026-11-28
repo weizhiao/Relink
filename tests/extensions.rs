@@ -3,13 +3,9 @@
 mod fixtures;
 
 use elf_loader::{
-    AddressSpaceId, Domain, LinkContext, Linker, Loader, Relocator, Result,
+    AddressSpaceId, Domain, Loader, Relocator, Result,
     arch::NativeArch,
     input::ElfBinary,
-    linker::{
-        SearchPathResolver,
-        scan::{DataPass, LinkPass, LinkPassPlan},
-    },
     memory::{RegionAccess, VmAddr},
     observer::{RelocationObserver, SymbolBindingEvent},
     tls::TlsResolver,
@@ -64,6 +60,7 @@ fn override_constructor_call() -> Result<()> {
 #[test]
 fn late_host_symbol() -> Result<()> {
     use elf_loader::{
+        LinkContext,
         image::{SyntheticModule, SyntheticSymbol},
         lazy::NativeLazyBinder,
         linker::GraphModule,
@@ -102,106 +99,5 @@ fn late_host_symbol() -> Result<()> {
     assert_eq!(score(), 102);
     drop(plugin);
     drop(context.release(lease)?);
-    Ok(())
-}
-
-struct SetPoints(i32);
-
-impl LinkPass<DataPass> for SetPoints {
-    fn run(&mut self, plan: &mut LinkPassPlan<'_, DataPass>) -> Result<()> {
-        let section = plan
-            .sections()
-            .find(|s| s.metadata(plan).name() == b".points")
-            .unwrap();
-        section
-            .data_mut(plan)?
-            .copy_from_slice(&self.0.to_ne_bytes());
-        Ok(())
-    }
-}
-
-#[test]
-fn configure_before_load() -> Result<()> {
-    let path = compile(
-        "tests/fixtures/points.c",
-        "settings.so",
-        &["-shared", "-fPIC", "-Wl,--emit-relocs"],
-    );
-    let mut context = LinkContext::for_process();
-    let loaded = Linker::new()
-        .with_resolver(SearchPathResolver::new())
-        .run()
-        .map_pipeline(|mut pipeline| {
-            pipeline.push(SetPoints(75));
-            pipeline
-        })
-        .load_scan_first(&mut context, path)?;
-    let module = context.module(loaded.root())?;
-    let points = unsafe { module.get::<extern "C" fn() -> i32>("points") }?.unwrap();
-    assert_eq!(points(), 75);
-    drop(loaded.release(&mut context)?);
-    Ok(())
-}
-
-#[cfg(target_arch = "x86_64")]
-#[test]
-fn reordered_plt() -> Result<()> {
-    use elf_loader::{
-        linker::scan::{Materialization, ReorderPass},
-        relocation::BindingMode,
-    };
-
-    struct ReorderPlugin;
-    impl LinkPass<ReorderPass> for ReorderPlugin {
-        fn run(&mut self, plan: &mut LinkPassPlan<'_, ReorderPass>) -> Result<()> {
-            let plugin = plan.root().expect("plugin must support section reordering");
-            plugin.set_materialization(plan, Materialization::SectionRegions);
-            Ok(())
-        }
-    }
-
-    compile(
-        "tests/fixtures/points.c",
-        "libpoints.so",
-        &["-shared", "-fPIC"],
-    );
-    let plugin = compile(
-        "tests/fixtures/plugin.c",
-        "plugin.so",
-        &[
-            "-shared",
-            "-fPIC",
-            "-fplt",
-            "-Wl,--emit-relocs,-rpath,$ORIGIN",
-            "-L.",
-            "-lpoints",
-        ],
-    );
-    for mode in [
-        BindingMode::Eager,
-        #[cfg(feature = "lazy-binding")]
-        BindingMode::Lazy,
-    ] {
-        let mut context = LinkContext::for_process();
-        let mut search = SearchPathResolver::new();
-        search.push_runpath().push_rpath();
-        let relocator = Relocator::new().with_binding(mode);
-        #[cfg(feature = "lazy-binding")]
-        let relocator = relocator.with_lazy_binder(elf_loader::lazy::NativeLazyBinder::new());
-        let loaded = Linker::new()
-            .with_resolver(search)
-            .with_relocator(relocator)
-            .run()
-            .map_pipeline(|mut pipeline| {
-                pipeline.push(ReorderPlugin);
-                pipeline
-            })
-            .load_scan_first(&mut context, plugin.clone())?;
-        let module = context.module(loaded.root())?;
-        let score = unsafe { module.get::<extern "C" fn() -> i32>("score") }?.unwrap();
-        // Exercise both the first dispatch and the resolved slot.
-        assert_eq!([score(), score()], [42, 42]);
-        drop(loaded.release(&mut context)?);
-    }
     Ok(())
 }

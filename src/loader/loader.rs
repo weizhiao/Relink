@@ -202,7 +202,7 @@ where
     ///
     /// No policy is configured by default. See [`ThpPolicy`] for which file,
     /// copied, and BSS ranges receive advice and when it is applied.
-    /// Section arenas and borrowed mappings are excluded.
+    /// Borrowed mappings are excluded.
     ///
     /// The target size comes from [`Mmap::thp_page_size`]. If unavailable, the
     /// loader skips THP alignment and advice. Otherwise the policy may increase

@@ -1,23 +1,23 @@
+use super::HandleResult;
 #[cfg(feature = "object")]
 use super::RelocHelper;
-use super::{HandleResult, RelocValue, RelocationValueKind};
 #[cfg(feature = "object")]
 use crate::elf::{ElfRelType, ElfShdr};
-#[cfg(feature = "object")]
-use crate::object::layout::PltGotSection;
 use crate::{
-    ByteRepr, RelocReason, Result,
+    ByteRepr, Result,
     arch::ArchKind,
     elf::{ElfLayout, ElfMachine, ElfRelEntry, ElfRelocationType, ElfTarget, ElfWord},
     image::{GlobalScope, LocalScope},
     lazy::{LazyBinder, LazyPlacement},
-    memory::{ImageMemory, ImageMemoryExt, RegionAccess, VmAddr},
+    memory::{ImageMemory, ImageMemoryExt, RegionAccess},
     observer::{RelocationEvent, RelocationObserver},
     relocation::SymbolRegistry,
     runtime::Domain,
     sync::Arc,
     tls::TlsResolver,
 };
+#[cfg(feature = "object")]
+use crate::{RelocReason, object::layout::PltGotSection};
 
 /// Defines ELF relocation numbers for a target architecture.
 /// The loader selects the native architecture by default; use
@@ -77,10 +77,6 @@ pub trait RelocationArch: 'static {
     /// lazy binding trampolines, and init arrays keep their current behavior.
     /// Cross-architecture implementations normally leave this as `false`.
     const SUPPORTS_NATIVE_RUNTIME: bool = false;
-
-    /// Whether scan-first linking can repair retained relocations after
-    /// section-level reordering for this architecture.
-    const SUPPORTS_SECTION_REORDER: bool = false;
 
     /// Validates architecture-specific ELF header flags.
     #[inline]
@@ -216,52 +212,6 @@ pub trait ObjectArch: RelocationArch {}
 
 #[cfg(not(feature = "object"))]
 impl<T: RelocationArch> ObjectArch for T {}
-
-pub(crate) trait RelocationValueProvider {
-    fn relocation_value_kind(
-        _relocation_type: usize,
-    ) -> core::result::Result<RelocationValueKind, RelocReason> {
-        Err(RelocReason::Unsupported)
-    }
-
-    fn relocation_value<T>(
-        input: RelocationValueInput,
-        skip: impl FnOnce(RelocValue<()>) -> T,
-        write_addr: impl FnOnce(VmAddr) -> T,
-        write_word32: impl FnOnce(RelocValue<u32>) -> T,
-        write_sword32: impl FnOnce(RelocValue<i32>) -> T,
-    ) -> core::result::Result<T, RelocReason> {
-        let kind = Self::relocation_value_kind(input.relocation_type)?;
-        match kind {
-            RelocationValueKind::None => Ok(skip(RelocValue::new(()))),
-            RelocationValueKind::Address(formula) => {
-                Ok(write_addr(VmAddr::new(
-                    formula.compute(input.target, input.addend, input.place) as usize,
-                )))
-            }
-            RelocationValueKind::Word32(formula) => {
-                u32::try_from(formula.compute(input.target, input.addend, input.place))
-                    .map(RelocValue::new)
-                    .map(write_word32)
-                    .map_err(|_| RelocReason::IntConversionOutOfRange)
-            }
-            RelocationValueKind::SWord32(formula) => {
-                i32::try_from(formula.compute(input.target, input.addend, input.place))
-                    .map(RelocValue::new)
-                    .map(write_sword32)
-                    .map_err(|_| RelocReason::IntConversionOutOfRange)
-            }
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct RelocationValueInput {
-    pub(crate) relocation_type: usize,
-    pub(crate) target: usize,
-    pub(crate) addend: isize,
-    pub(crate) place: usize,
-}
 
 /// Binding mode configuration for relocation.
 ///

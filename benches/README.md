@@ -139,7 +139,7 @@ All LOADs, including writable data and BSS, receive `MADV_HUGEPAGE` before copyi
 `Collapse` also attempts to merge complete huge pages of initialized contents
 after copying and before final segment protections. BSS is not synchronously
 collapsed. File-offset alignment is irrelevant to copied inputs; only destination
-addresses must align. Section arenas and borrowed mappings remain excluded.
+addresses must align. Borrowed mappings remain excluded.
 
 The `relink_thp` benchmark enables both; its page counts can therefore include BSS
 huge pages. Regenerate baselines from versions where `with_thp` affected files only.

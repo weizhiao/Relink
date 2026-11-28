@@ -153,14 +153,6 @@ pub trait ElfRelEntry<L: ElfLayout = NativeElfLayout> {
     fn as_rela(&self) -> Option<&ElfRela<L>>;
     /// Returns this entry as an implicit-addend relocation, when applicable.
     fn as_rel(&self) -> Option<&ElfRel<L>>;
-    /// Updates the relocation target offset.
-    fn set_offset(&mut self, offset: VmOffset);
-    /// Writes the relocation addend, storing implicit addends to the relocation place.
-    fn write_addend<Memory>(&mut self, memory: &Memory, place: VmAddr, addend: isize) -> Result<()>
-    where
-        Memory: ImageMemory,
-        L::Word: ByteRepr;
-
     /// Builds an entry from raw `r_offset`/`r_info`/`r_addend` fields, used when
     /// expanding Android packed relocations into plain entries.
     fn from_fields(r_offset: usize, r_info: usize, r_addend: isize) -> Self;
@@ -209,26 +201,6 @@ impl<L: ElfLayout> ElfRelEntry<L> for ElfRela<L> {
     fn as_rel(&self) -> Option<&ElfRel<L>> {
         None
     }
-
-    #[inline]
-    fn set_offset(&mut self, offset: VmOffset) {
-        self.rela.set_r_offset(offset.get());
-    }
-
-    #[inline]
-    fn write_addend<Memory>(
-        &mut self,
-        _memory: &Memory,
-        _place: VmAddr,
-        addend: isize,
-    ) -> Result<()>
-    where
-        Memory: ImageMemory,
-        L::Word: ByteRepr,
-    {
-        self.rela.set_r_addend(addend);
-        Ok(())
-    }
 }
 
 impl<L: ElfLayout> ElfRelEntry<L> for ElfRel<L> {
@@ -273,21 +245,6 @@ impl<L: ElfLayout> ElfRelEntry<L> for ElfRel<L> {
     #[inline]
     fn as_rel(&self) -> Option<&ElfRel<L>> {
         Some(self)
-    }
-
-    #[inline]
-    fn set_offset(&mut self, offset: VmOffset) {
-        self.rel.set_r_offset(offset.get());
-    }
-
-    #[inline]
-    fn write_addend<Memory>(&mut self, memory: &Memory, place: VmAddr, addend: isize) -> Result<()>
-    where
-        Memory: ImageMemory,
-        L::Word: ByteRepr,
-    {
-        let word = L::Word::from_usize(addend as usize);
-        unsafe { memory.write_value(place, word) }
     }
 }
 

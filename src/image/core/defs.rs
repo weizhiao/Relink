@@ -276,10 +276,10 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         &self.segments
     }
 
-    /// Returns the mapped module-relative ranges owned by this ELF image.
+    /// Returns the mapped range relative to the ELF image base.
     #[inline]
-    pub fn mapped_ranges(&self) -> &[MappedRange] {
-        self.segments.ranges()
+    pub const fn mapped_range(&self) -> MappedRange {
+        self.segments.range()
     }
 
     /// Returns the `PT_GNU_EH_FRAME` header address, when present.

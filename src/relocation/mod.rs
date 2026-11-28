@@ -12,7 +12,6 @@ mod run;
 mod symbol;
 mod traits;
 
-pub(crate) use defs::{RelocValue, RelocationValueFormula, RelocationValueKind};
 pub(crate) use dynamic::DynamicRelocation;
 pub use dynamic::{relocate_relative, relocate_relr};
 pub(crate) use helper::{BindingDeps, RelocHelper};
@@ -20,7 +19,7 @@ pub(crate) use symbol::{BindingEffect, SymDef, SymbolRegistry, SymbolResolver, S
 #[cfg(feature = "object")]
 pub(crate) use traits::ObjectRelocation;
 pub use traits::{ObjectArch, RelocationArch};
-pub(crate) use traits::{Relocatable, RelocateArgs, RelocationValueInput, RelocationValueProvider};
+pub(crate) use traits::{Relocatable, RelocateArgs};
 
 pub use crate::observer::RelocationEvent;
 pub use defs::HandleResult;

@@ -10,7 +10,6 @@ mod import;
 mod resolve;
 mod resolver;
 mod run;
-pub mod scan;
 mod session;
 mod storage;
 mod unload;

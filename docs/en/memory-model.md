@@ -7,7 +7,7 @@ The [`Mmap` trait](../../src/os/traits.rs) creates and populates mappings;
 ```text
 Mmap                  creates and populates a mapping
   → MappedRegion      shares ownership of a RegionAccess backend
-    → ElfSegments     translates image addresses and checks mapped ranges
+    → ElfSegments     translates image addresses and checks the mapped range
       → ImageMemory   exposes address-based access to the rest of the loader
 ```
 
@@ -65,10 +65,10 @@ must handle that case rather than assume every parsing path can borrow memory.
 
 ## Image Address Translation
 
-`ElfSegments` retains a load base, a backing `MappedRegion`, and image-relative
-`MappedRange` entries. The ranges can be sparse even though the backing region is
-contiguous. Access first checks that the requested address range belongs to the
-image, then converts it to an offset in the backing region.
+`ElfSegments` represents one contiguous span backed by a `MappedRegion`.
+`ElfSegments::range()` returns a `MappedRange` by value. Its `offset` is relative
+to the image base and its `len` is measured in bytes. Individual `PT_LOAD`
+segments within that span can have different page protections.
 
 `ImageMemory` exposes this address-based view through range queries, byte access,
 and optional host pointers. `ImageMemoryExt` adds typed access helpers while

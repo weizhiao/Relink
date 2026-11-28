@@ -156,7 +156,7 @@
 //! ## Platforms and Examples
 //!
 //! - The [`examples`](https://github.com/weizhiao/Relink/tree/main/examples) directory
-//!   covers loading from memory, `LinkerRun::load`, scan-first linking, observer hooks,
+//!   covers loading from memory, `LinkerRun::load`, observer hooks,
 //!   and object loading.
 //! - The crate currently targets `x86_64`, `x86`, `aarch64`, `arm`, `riscv64`, `riscv32`,
 //!   and `loongarch64`.

@@ -389,6 +389,7 @@ impl<L: ElfLayout> ElfSymbol<L> {
     }
 
     /// Sets the symbol value.
+    #[cfg(feature = "object")]
     #[inline]
     pub(crate) fn set_value(&mut self, value: usize) {
         self.sym.set_st_value(value);

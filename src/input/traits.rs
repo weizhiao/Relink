@@ -84,7 +84,7 @@ pub(crate) trait ElfReaderExt: ElfReader {
             return Ok(values);
         }
 
-        let Some(()) = scratch.resize(len) else {
+        let Some(bytes) = scratch.resize(len) else {
             return Err(IoError::ReadOutOfBounds(Box::new(ReadBoundsError::new(
                 offset,
                 len,
@@ -92,7 +92,6 @@ pub(crate) trait ElfReaderExt: ElfReader {
             )))
             .into());
         };
-        let bytes = scratch.as_bytes_mut();
         self.read(bytes, offset)?;
         let Some(values) = try_cast_bytes::<V>(bytes) else {
             return Err(IoError::ReadBufferNotAligned {

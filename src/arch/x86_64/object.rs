@@ -5,10 +5,7 @@ use crate::{
     memory::{ImageMemory, ImageMemoryExt, RegionAccess, VmAddr},
     object::layout::{GotEntry, ObjectRelocKey, PltEntry, PltGotSection},
     observer::RelocationObserver,
-    relocation::{
-        ObjectRelocation, RelocHelper, RelocValue, RelocationArch, RelocationValueInput,
-        RelocationValueProvider,
-    },
+    relocation::{ObjectRelocation, RelocHelper, RelocationArch},
     tls::TlsResolver,
 };
 use elf::abi::*;
@@ -21,11 +18,12 @@ pub(crate) const PLT_ENTRY: [u8; PLT_ENTRY_SIZE] = [
     0xf3, 0x0f, 0x1e, 0xfa, 0xff, 0x25, 0, 0, 0, 0, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
 ];
 
-enum ObjectWrite {
-    None,
-    Addr(VmAddr),
-    Word32(RelocValue<u32>),
-    SWord32(RelocValue<i32>),
+fn displacement(
+    target: VmAddr,
+    addend: isize,
+    place: VmAddr,
+) -> core::result::Result<i32, core::num::TryFromIntError> {
+    i32::try_from(target.get() as i128 + addend as i128 - place.get() as i128)
 }
 
 impl ObjectRelocation for X86_64Arch {
@@ -45,82 +43,69 @@ impl ObjectRelocation for X86_64Arch {
         Obs: RelocationObserver<Self> + ?Sized,
         Memory: ImageMemory,
     {
-        let r_type = rel.r_type();
         let place = VmAddr::new(target.sh_addr()) + rel.r_offset();
-        let append = rel.read_addend(helper.memory(), place)?;
-        let value_error = |reason| helper.reloc_error(rel, reason);
-        let relocation_target_value = |target| {
-            Self::object_relocation_value(r_type.raw() as usize, target, append, place.get())
-        };
-        let write_relocation_target = |memory: &Memory, target| -> Result<()> {
-            Self::write_object_value(
-                memory,
-                place,
-                relocation_target_value(target).map_err(value_error)?,
-            )
-        };
-
-        match r_type.raw() {
+        let addend = rel.read_addend(helper.memory(), place)?;
+        let out_of_range = |_| helper.reloc_error(rel, RelocReason::IntConversionOutOfRange);
+        match rel.r_type().raw() {
             R_X86_64_NONE => {}
             R_X86_64_64 => {
                 let sym = helper.symbol_addr(rel.r_symbol());
-                write_relocation_target(helper.memory(), sym.get())?;
-            }
-            R_X86_64_PC32 => {
-                let sym = helper.symbol_addr(rel.r_symbol());
-                write_relocation_target(helper.memory(), sym.get())?;
-            }
-            R_X86_64_PLT32 => {
-                let sym = helper.symbol_addr(rel.r_symbol());
-                match relocation_target_value(sym.get()) {
-                    Ok(value) => Self::write_object_value(helper.memory(), place, value)?,
-                    Err(RelocReason::IntConversionOutOfRange) => {
-                        let key = ObjectRelocKey::new::<Self>(rel, append);
-                        let plt_entry = pltgot.add_plt_entry(key);
-                        let plt_entry_addr = match plt_entry {
-                            PltEntry::Occupied(plt_entry_addr) => plt_entry_addr,
-                            PltEntry::Vacant { plt, mut got } => {
-                                let plt_entry_addr = VmAddr::from_ptr(plt.as_ptr());
-                                got.update(sym);
-                                let call_offset = VmAddr::new(
-                                    got.get_addr()
-                                        .get()
-                                        .wrapping_sub(plt_entry_addr.get())
-                                        .wrapping_sub(10),
-                                );
-                                let call_offset_val =
-                                    call_offset.try_into_sword32().map_err(value_error)?;
-                                plt[6..10].copy_from_slice(&call_offset_val.to_ne_bytes());
-                                plt_entry_addr
-                            }
-                        };
-                        write_relocation_target(helper.memory(), plt_entry_addr.get())?;
-                    }
-                    Err(reason) => return Err(value_error(reason)),
-                }
-            }
-            R_X86_64_GOTPCREL => {
-                let sym = helper.symbol_addr(rel.r_symbol());
-                let key = ObjectRelocKey::new::<Self>(rel, append);
-                let got_entry = pltgot.add_got_entry(key);
-                let got_entry_addr = match got_entry {
-                    GotEntry::Occupied(got_entry_addr) => got_entry_addr,
-                    GotEntry::Vacant(mut got) => {
-                        got.update(sym);
-                        got.get_addr()
-                    }
-                };
-                write_relocation_target(helper.memory(), got_entry_addr.get())?;
+                let value = (sym.get() as u64).wrapping_add_signed(addend as i64);
+                unsafe { helper.memory().write_value(place, value)? };
             }
             R_X86_64_32 => {
                 let sym = helper.symbol_addr(rel.r_symbol());
-                write_relocation_target(helper.memory(), sym.get())?;
+                let value =
+                    u32::try_from(sym.get() as i128 + addend as i128).map_err(out_of_range)?;
+                unsafe { helper.memory().write_value(place, value)? };
             }
             R_X86_64_32S => {
                 let sym = helper.symbol_addr(rel.r_symbol());
-                write_relocation_target(helper.memory(), sym.get())?;
+                let value =
+                    i32::try_from(sym.get() as i128 + addend as i128).map_err(out_of_range)?;
+                unsafe { helper.memory().write_value(place, value)? };
             }
-            _ => return Err(value_error(RelocReason::UnknownSymbol)),
+            R_X86_64_PC32 => {
+                let sym = helper.symbol_addr(rel.r_symbol());
+                let value = displacement(sym, addend, place).map_err(out_of_range)?;
+                unsafe { helper.memory().write_value(place, value)? };
+            }
+            R_X86_64_PLT32 => {
+                let sym = helper.symbol_addr(rel.r_symbol());
+                let value = match displacement(sym, addend, place) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let key = ObjectRelocKey::new::<Self>(rel, addend);
+                        let stub = match pltgot.add_plt_entry(key) {
+                            PltEntry::Occupied(addr) => addr,
+                            PltEntry::Vacant { plt, mut got } => {
+                                let stub = VmAddr::from_ptr(plt.as_ptr());
+                                got.update(sym);
+                                // The indirect jump reads the GOT relative to the end of the instruction.
+                                let offset = displacement(got.get_addr(), -10, stub)
+                                    .map_err(out_of_range)?;
+                                plt[6..10].copy_from_slice(&offset.to_le_bytes());
+                                stub
+                            }
+                        };
+                        displacement(stub, addend, place).map_err(out_of_range)?
+                    }
+                };
+                unsafe { helper.memory().write_value(place, value)? };
+            }
+            R_X86_64_GOTPCREL => {
+                let key = ObjectRelocKey::new::<Self>(rel, addend);
+                let addr = match pltgot.add_got_entry(key) {
+                    GotEntry::Occupied(addr) => addr,
+                    GotEntry::Vacant(mut got) => {
+                        got.update(helper.symbol_addr(rel.r_symbol()));
+                        got.get_addr()
+                    }
+                };
+                let value = displacement(addr, addend, place).map_err(out_of_range)?;
+                unsafe { helper.memory().write_value(place, value)? };
+            }
+            _ => return Err(helper.reloc_error(rel, RelocReason::UnknownSymbol)),
         }
 
         Ok(())
@@ -134,44 +119,5 @@ impl ObjectRelocation for X86_64Arch {
     #[inline]
     fn needs_plt(r_type: ElfRelocationType) -> bool {
         r_type.raw() == R_X86_64_PLT32
-    }
-}
-
-impl X86_64Arch {
-    #[inline]
-    fn object_relocation_value(
-        r_type: usize,
-        target: usize,
-        append: isize,
-        place: usize,
-    ) -> core::result::Result<ObjectWrite, RelocReason> {
-        <Self as RelocationValueProvider>::relocation_value(
-            RelocationValueInput {
-                relocation_type: r_type,
-                target,
-                addend: append,
-                place,
-            },
-            |_| ObjectWrite::None,
-            ObjectWrite::Addr,
-            ObjectWrite::Word32,
-            ObjectWrite::SWord32,
-        )
-    }
-
-    #[inline]
-    fn write_object_value<Memory>(memory: &Memory, place: VmAddr, value: ObjectWrite) -> Result<()>
-    where
-        Memory: ImageMemory,
-    {
-        unsafe {
-            match value {
-                ObjectWrite::None => {}
-                ObjectWrite::Addr(value) => memory.write_value(place, value.get())?,
-                ObjectWrite::Word32(value) => memory.write_value(place, value.into_inner())?,
-                ObjectWrite::SWord32(value) => memory.write_value(place, value.into_inner())?,
-            }
-        }
-        Ok(())
     }
 }

@@ -8,10 +8,9 @@ use elf::abi::*;
 use crate::arch::ArchKind;
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::lazy::LazyPlacement;
-use crate::linker::scan::PltArch;
 #[cfg(feature = "object")]
 use crate::relocation::ObjectRelocation;
-use crate::relocation::{RelocationArch, RelocationValueProvider};
+use crate::relocation::RelocationArch;
 
 /// AArch64 (ARM64) architecture marker.
 #[derive(Debug, Clone, Copy, Default)]
@@ -66,6 +65,3 @@ impl RelocationArch for AArch64Arch {
 impl ObjectRelocation for AArch64Arch {
     type State = ();
 }
-
-impl RelocationValueProvider for AArch64Arch {}
-impl PltArch for AArch64Arch {}

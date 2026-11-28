@@ -68,8 +68,8 @@ impl PageSize {
 /// Copied inputs receive `MADV_HUGEPAGE` across complete pages in all LOADs before
 /// copying; `Collapse` additionally collapses initialized contents while the
 /// destination is still writable, before final segment protections.
-/// Sparse usage may increase resident memory. Section arenas and borrowed mappings
-/// are excluded. File mappings receive advice after all mapping replacements and
+/// Sparse usage may increase resident memory. Borrowed mappings are excluded.
+/// File mappings receive advice after all mapping replacements and
 /// segment protections. Shared images request compatible huge-page alignment;
 /// file mappings favor executable coverage, then total non-writable coverage.
 /// Advice failures are ignored. No policy requests reserved hugetlb pages.

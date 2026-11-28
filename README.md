@@ -29,7 +29,6 @@ Relink is a Rust ELF loader and runtime linker for plugins, JITs, and custom run
 
 - **Flexible inputs:** load shared libraries, executables, and relocatable objects (`.o` / `.ko`) from files or memory.
 - **Control over linking:** customize dependency resolution, symbol scopes, and relocation; observe or intervene in loading through observers.
-- **Optimize before loading:** scan before mapping, reorder sections, and group hot code. See [platform support](#platform-support) for architecture coverage.
 - **Fit your runtime:** `no_std` support with replaceable mmap and memory-access backends for kernels, embedded systems, or remote memory.
 
 ## Benchmarks
@@ -105,20 +104,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-More examples: [memory loading](https://github.com/weizhiao/Relink/blob/main/examples/load_from_memory.rs) · [object files](https://github.com/weizhiao/Relink/blob/main/examples/load_object.rs) · [layout changes](https://github.com/weizhiao/Relink/blob/main/examples/linker_scan_first.rs) · [host imports](https://github.com/weizhiao/Relink/blob/main/examples/host_import.rs).
+More examples: [memory loading](https://github.com/weizhiao/Relink/blob/main/examples/load_from_memory.rs) · [object files](https://github.com/weizhiao/Relink/blob/main/examples/load_object.rs) · [host imports](https://github.com/weizhiao/Relink/blob/main/examples/host_import.rs).
 
 ## Platform Support
 
-| Instruction set | Dynamic libraries / executables | Section reordering | `.o` / `ET_REL` |
-| --- | --- | --- | --- |
-| `x86_64` | ✅ | ✅ | ✅ |
-| `x86` | ✅ | 🚧 | 🚧 |
-| `aarch64` | ✅ | 🚧 | 🚧 |
-| `arm` | ✅ | 🚧 | 🚧 |
-| `riscv64` | ✅ | 🚧 | ✅ |
-| `riscv32` | ✅ | 🚧 | 🚧 |
-| `loongarch64` | ✅ | 🚧 | 🚧 |
-| `xtensa` | 🔧 | 🚧 | 🚧 |
+| Instruction set | Dynamic libraries / executables | `.o` / `ET_REL` |
+| --- | --- | --- |
+| `x86_64` | ✅ | ✅ |
+| `x86` | ✅ | 🚧 |
+| `aarch64` | ✅ | 🚧 |
+| `arm` | ✅ | 🚧 |
+| `riscv64` | ✅ | ✅ |
+| `riscv32` | ✅ | 🚧 |
+| `loongarch64` | ✅ | 🚧 |
+| `xtensa` | 🔧 | 🚧 |
 
 ✅ Supported · 🔧 Partial support · 🚧 Pending.
 

@@ -21,22 +21,6 @@ pub(crate) fn rounddown(value: usize, align: usize) -> usize {
     value & !(align - 1)
 }
 
-/// Round up a value to the nearest alignment boundary for any alignment.
-///
-/// Passing `0` leaves the value unchanged.
-#[inline]
-pub(crate) fn align_up(value: usize, align: usize) -> usize {
-    let align = align.max(1);
-    let remainder = value % align;
-    if remainder == 0 {
-        return value;
-    }
-
-    value
-        .checked_add(align - remainder)
-        .expect("alignment overflowed while rounding up value")
-}
-
 /// Virtual address in the loaded image's address space.
 #[must_use = "address arithmetic returns a new value"]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

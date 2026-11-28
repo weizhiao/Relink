@@ -66,6 +66,8 @@ fn interpreter_path() -> Result<()> {
     let mapped = run.load(path)?;
     assert_eq!(scanned.interp(), Some(b"/runtime/\xff".as_slice()));
     assert_eq!(mapped.interp(), scanned.interp());
+    let dynamic = run.load_scanned_dynamic(scanned.into_dynamic().unwrap())?;
+    assert_eq!(dynamic.interp(), mapped.interp());
     Ok(())
 }
 

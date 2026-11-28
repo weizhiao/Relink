@@ -1,6 +1,5 @@
 use super::{
     context::LinkContext,
-    resolver::DependencySource,
     storage::{CommittedStorage, ModuleId, ModuleKey, ModuleSlot, ReservationReturns, StoredEntry},
 };
 use crate::{
@@ -152,8 +151,13 @@ impl Drop for PendingSources {
     }
 }
 
-pub(crate) struct ResolveSession<P, Arch: RelocationArch> {
-    dynamics: BTreeMap<ModuleSlot, GraphEntry<P>>,
+pub(crate) struct ResolveSession<
+    D: Send + Sync + 'static,
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch>,
+> {
+    dynamics: BTreeMap<ModuleSlot, GraphEntry<RawDynamic<D, Arch, R, Tls>>>,
     modules: BTreeMap<ModuleSlot, PendingModule<Arch>>,
     committed_deps: BTreeMap<ModuleSlot, Box<[ModuleSlot]>>,
     // Generations observed while resolving. Publication rejects the whole
@@ -165,9 +169,11 @@ pub(crate) struct ResolveSession<P, Arch: RelocationArch> {
     pins: Vec<ModuleSlot>,
 }
 
-impl<P, Arch> ResolveSession<P, Arch>
+impl<D: Send + Sync + 'static, Arch, R, Tls> ResolveSession<D, Arch, R, Tls>
 where
     Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(crate) fn new(returns: ReservationReturns) -> Self {
@@ -256,7 +262,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn dynamic_payload(&self, slot: ModuleSlot) -> Option<&P> {
+    pub(crate) fn dynamic_payload(&self, slot: ModuleSlot) -> Option<&RawDynamic<D, Arch, R, Tls>> {
         self.dynamics.get(&slot).map(GraphEntry::payload)
     }
 
@@ -265,13 +271,10 @@ where
         self.modules.get(&slot).map(PendingModule::module)
     }
 
-    pub(crate) fn loader(&self, slot: ModuleSlot) -> Option<ModuleSlot>
-    where
-        P: DependencySource,
-    {
+    pub(crate) fn loader(&self, slot: ModuleSlot) -> Option<ModuleSlot> {
         let source = self
             .dynamic_payload(slot)
-            .map(DependencySource::source_id)
+            .map(|raw| raw.state().instance_id().source_id())
             .or_else(|| self.staged_module(slot).map(|module| module.source_id()))?;
         self.sources.entries[&source].loader
     }
@@ -295,7 +298,7 @@ where
         slot: ModuleSlot,
         generation: u32,
         entry_key: ModuleKey,
-        payload: P,
+        payload: RawDynamic<D, Arch, R, Tls>,
     ) {
         self.track(slot, generation);
         let previous = self.dynamics.insert(
@@ -324,55 +327,6 @@ where
         debug_assert!(previous.is_none(), "pending modules must be unique");
     }
 
-    pub(crate) fn split_dynamics<Q>(
-        self,
-    ) -> (BTreeMap<ModuleSlot, GraphEntry<P>>, ResolveSession<Q, Arch>) {
-        let Self {
-            dynamics,
-            modules,
-            committed_deps,
-            guards,
-            group_order,
-            bindings,
-            sources,
-            pins,
-        } = self;
-        (
-            dynamics,
-            ResolveSession {
-                dynamics: BTreeMap::new(),
-                modules,
-                committed_deps,
-                guards,
-                group_order,
-                bindings,
-                sources,
-                pins,
-            },
-        )
-    }
-
-    pub(crate) fn restore_dynamic(
-        &mut self,
-        slot: ModuleSlot,
-        entry_key: ModuleKey,
-        payload: P,
-        direct_deps: Box<[ModuleSlot]>,
-    ) {
-        let previous = self.dynamics.insert(
-            slot,
-            GraphEntry {
-                entry_key,
-                payload,
-                direct_deps: Some(direct_deps),
-            },
-        );
-        debug_assert!(
-            previous.is_none(),
-            "restored dynamic modules must be unique"
-        );
-    }
-
     #[inline]
     pub(crate) fn group_order(&self) -> &[ModuleSlot] {
         &self.group_order
@@ -392,14 +346,7 @@ where
             Entry::Occupied(entry) => debug_assert_eq!(*entry.get(), generation),
         }
     }
-}
 
-impl<D: Send + Sync + 'static, Arch, R, Tls> ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch>
-where
-    Arch: RelocationArch,
-    R: RegionAccess,
-    Tls: TlsResolver<Arch>,
-{
     pub(crate) fn build_scope<Meta>(
         &self,
         context: &LinkContext<Meta, Arch, Tls>,
@@ -430,7 +377,7 @@ pub(crate) struct LoadSession<
     R: RegionAccess,
     Tls: TlsResolver<Arch> = (),
 > {
-    resolve: ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch>,
+    resolve: ResolveSession<D, Arch, R, Tls>,
     // Relocation appends modules in lifecycle order, which is also the order
     // used for initialization and publication.
     ready_to_commit: Vec<(ModuleSlot, ReadyModule<Arch>)>,
@@ -456,7 +403,7 @@ where
     Tls: TlsResolver<Arch>,
 {
     #[inline]
-    pub(crate) fn from_resolve(resolve: ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch>) -> Self {
+    pub(crate) fn from_resolve(resolve: ResolveSession<D, Arch, R, Tls>) -> Self {
         let pending_len = resolve.dynamics.len() + resolve.modules.len();
         Self {
             resolve,

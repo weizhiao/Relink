@@ -6,7 +6,7 @@ mod search_path;
 mod traits;
 
 pub use ld_cache::LdCache;
-pub(crate) use request::{DependencySource, LoaderVisitor};
+pub(crate) use request::LoaderVisitor;
 pub use request::{ResolveInput, ResolveRequest};
 pub use search_path::{CandidateRequest, SearchConfig, SearchPathResolver};
 pub(crate) use traits::ResolvedKind;

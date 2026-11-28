@@ -425,7 +425,6 @@ impl_dyn_raw!(elf::dynamic::Elf32_Dyn);
 impl_dyn_raw!(elf::dynamic::Elf64_Dyn);
 
 pub trait ElfRelRaw: 'static {
-    fn set_r_offset(&mut self, value: usize);
     fn r_offset(&self) -> usize;
     fn r_info(&self) -> usize;
 
@@ -436,11 +435,6 @@ pub trait ElfRelRaw: 'static {
 macro_rules! impl_rel_raw {
     ($ty:ty) => {
         impl ElfRelRaw for $ty {
-            #[inline]
-            fn set_r_offset(&mut self, value: usize) {
-                self.r_offset = value as _;
-            }
-
             #[inline]
             fn r_offset(&self) -> usize {
                 self.r_offset as usize
@@ -466,7 +460,6 @@ impl_rel_raw!(elf::relocation::Elf32_Rel);
 impl_rel_raw!(elf::relocation::Elf64_Rel);
 
 pub trait ElfRelaRaw: ElfRelRaw {
-    fn set_r_addend(&mut self, value: isize);
     fn r_addend(&self) -> isize;
 
     /// Builds an entry from its raw `r_offset`/`r_info`/`r_addend` fields, used
@@ -477,11 +470,6 @@ pub trait ElfRelaRaw: ElfRelRaw {
 macro_rules! impl_rela_raw {
     ($ty:ty) => {
         impl ElfRelRaw for $ty {
-            #[inline]
-            fn set_r_offset(&mut self, value: usize) {
-                self.r_offset = value as _;
-            }
-
             #[inline]
             fn r_offset(&self) -> usize {
                 self.r_offset as usize
@@ -503,11 +491,6 @@ macro_rules! impl_rela_raw {
         }
 
         impl ElfRelaRaw for $ty {
-            #[inline]
-            fn set_r_addend(&mut self, value: isize) {
-                self.r_addend = value as _;
-            }
-
             #[inline]
             fn r_addend(&self) -> isize {
                 self.r_addend as isize

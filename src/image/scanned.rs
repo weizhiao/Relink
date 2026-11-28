@@ -1,7 +1,7 @@
-//! Pre-mapping ELF descriptions and lazily readable section data.
+//! ELF headers, sections, and dependency metadata available before mapping.
 
 use crate::{
-    AlignedBytes, ParseDynamicError, ParsePhdrError, Result,
+    ParseDynamicError, ParsePhdrError, Result,
     arch::NativeArch,
     elf::{
         ElfDyn, ElfDynamicTag, ElfHeader, ElfLayout, ElfPhdr, ElfProgramType, ElfSectionFlags,
@@ -115,38 +115,11 @@ impl<L: ElfLayout> SectionTable<L> {
 
     fn section(&self, id: ElfSectionId) -> Option<ScannedSection<'_, L>> {
         let header = self.sections.get(id.index())?;
-        Some(ScannedSection::new(
+        Some(ScannedSection {
             id,
-            string_at(&self.shstrtab, header.sh_name() as usize).to_bytes(),
+            name: string_at(&self.shstrtab, header.sh_name() as usize).to_bytes(),
             header,
-        ))
-    }
-}
-
-/// The planning capability exposed by one scanned module.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ModuleCapability {
-    /// The module has no usable section-table view for planning.
-    Opaque,
-    /// The module exposes section metadata/data, but not enough retained
-    /// relocation inputs to support section reordering repair.
-    SectionData,
-    /// The module and target architecture support section-level reordering
-    /// and retained-relocation repair.
-    SectionReorderable,
-}
-
-impl ModuleCapability {
-    /// Returns whether this module exposes section metadata/data.
-    #[inline]
-    pub const fn has_section_data(self) -> bool {
-        !matches!(self, Self::Opaque)
-    }
-
-    /// Returns whether this module supports section reordering repair.
-    #[inline]
-    pub const fn supports_reorder_repair(self) -> bool {
-        matches!(self, Self::SectionReorderable)
+        })
     }
 }
 
@@ -160,7 +133,6 @@ pub struct ScannedDynamic<Arch: RelocationArch = NativeArch> {
     strtab: Box<[u8]>,
     section_table: Option<SectionTable<Arch::Layout>>,
     needed_libs: Box<[usize]>,
-    capability: ModuleCapability,
     reader: Box<dyn ElfReader + 'static>,
 }
 
@@ -215,6 +187,10 @@ impl<'a, L: ElfLayout> ScannedSections<'a, L> {
     fn new(table: Option<&'a SectionTable<L>>) -> Self {
         Self { table, index: 0 }
     }
+
+    fn allocated(self) -> impl Iterator<Item = ScannedSection<'a, L>> {
+        self.filter(|section| section.header().flags().contains(ElfSectionFlags::ALLOC))
+    }
 }
 
 impl<'a, L: ElfLayout> Iterator for ScannedSections<'a, L> {
@@ -236,11 +212,6 @@ impl<'a, L: ElfLayout> Iterator for ScannedSections<'a, L> {
 impl<L: ElfLayout> ExactSizeIterator for ScannedSections<'_, L> {}
 
 impl<'a, L: ElfLayout> ScannedSection<'a, L> {
-    #[inline]
-    fn new(id: ElfSectionId, name: &'a [u8], header: &'a ElfShdr<L>) -> Self {
-        Self { id, name, header }
-    }
-
     /// Returns the stable section id.
     #[inline]
     pub const fn id(&self) -> ElfSectionId {
@@ -258,93 +229,6 @@ impl<'a, L: ElfLayout> ScannedSection<'a, L> {
     pub fn header(&self) -> &'a ElfShdr<L> {
         self.header
     }
-
-    /// Returns the parsed section type.
-    #[inline]
-    pub fn section_type(&self) -> ElfSectionType {
-        self.header.section_type()
-    }
-
-    /// Returns the parsed section flags.
-    #[inline]
-    pub fn flags(&self) -> ElfSectionFlags {
-        self.header.flags()
-    }
-
-    /// Returns the section address.
-    #[inline]
-    pub fn address(&self) -> usize {
-        self.header.sh_addr()
-    }
-
-    /// Returns the section file offset.
-    #[inline]
-    pub fn file_offset(&self) -> usize {
-        self.header.sh_offset()
-    }
-
-    /// Returns the section size in bytes.
-    #[inline]
-    pub fn size(&self) -> usize {
-        self.header.sh_size()
-    }
-
-    /// Returns the section alignment in bytes.
-    #[inline]
-    pub fn alignment(&self) -> usize {
-        self.header.sh_addralign()
-    }
-
-    /// Returns whether the section contributes to the loaded memory image.
-    #[inline]
-    pub fn is_allocated(&self) -> bool {
-        self.flags().contains(ElfSectionFlags::ALLOC)
-    }
-
-    /// Returns whether the section is writable after mapping.
-    #[inline]
-    pub fn is_writable(&self) -> bool {
-        self.flags().contains(ElfSectionFlags::WRITE)
-    }
-
-    /// Returns whether the section is executable.
-    #[inline]
-    pub fn is_executable(&self) -> bool {
-        self.flags().contains(ElfSectionFlags::EXECINSTR)
-    }
-
-    /// Returns whether the section belongs to TLS storage.
-    #[inline]
-    pub fn is_tls(&self) -> bool {
-        self.flags().contains(ElfSectionFlags::TLS)
-    }
-
-    /// Returns whether the section is zero-fill only (`SHT_NOBITS`).
-    #[inline]
-    pub fn is_nobits(&self) -> bool {
-        self.section_type() == ElfSectionType::NOBITS
-    }
-
-    /// Returns whether the section stores retained relocations.
-    #[inline]
-    pub fn is_relocation_section(&self) -> bool {
-        matches!(
-            self.section_type(),
-            ElfSectionType::REL | ElfSectionType::RELA
-        )
-    }
-
-    /// Returns the linked section id referenced by `sh_link`, when non-zero.
-    #[inline]
-    pub fn linked_section_id(&self) -> Option<ElfSectionId> {
-        (self.header.sh_link() != 0).then_some(ElfSectionId::new(self.header.sh_link() as usize))
-    }
-
-    /// Returns the info section id referenced by `sh_info`, when non-zero.
-    #[inline]
-    pub fn info_section_id(&self) -> Option<ElfSectionId> {
-        (self.header.sh_info() != 0).then_some(ElfSectionId::new(self.header.sh_info() as usize))
-    }
 }
 
 impl<'a, L: ElfLayout> fmt::Debug for ScannedSection<'a, L> {
@@ -352,9 +236,9 @@ impl<'a, L: ElfLayout> fmt::Debug for ScannedSection<'a, L> {
         f.debug_struct("ScannedSection")
             .field("id", &self.id)
             .field("name", &self.name)
-            .field("type", &self.section_type())
-            .field("size", &self.size())
-            .field("align", &self.alignment())
+            .field("type", &self.header.section_type())
+            .field("size", &self.header.sh_size())
+            .field("align", &self.header.sh_addralign())
             .finish()
     }
 }
@@ -372,7 +256,6 @@ impl<Arch: RelocationArch> fmt::Debug for ScannedDynamic<Arch> {
                     .as_ref()
                     .map_or(0, |table| table.sections.len()),
             )
-            .field("capability", &self.capability)
             .finish()
     }
 }
@@ -513,7 +396,7 @@ impl<Arch: RelocationArch> ScannedElf<Arch> {
     /// Iterates over sections that contribute to the loaded memory image.
     #[inline]
     pub fn alloc_sections(&self) -> impl Iterator<Item = ScannedSection<'_, Arch::Layout>> {
-        self.sections().filter(|section| section.is_allocated())
+        self.sections().allocated()
     }
 }
 
@@ -546,12 +429,6 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
             Some(paths) => paths.module_search(path, soname, runpath, rpath),
             None => ModuleSearch::from_dynamic(path, soname, runpath, rpath),
         };
-        let capability = section_table
-            .as_ref()
-            .map_or(ModuleCapability::Opaque, |table| {
-                classify_module_capability::<Arch>(&table.sections)
-            });
-
         Ok(Self {
             source_id,
             search,
@@ -561,7 +438,6 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
             strtab,
             section_table,
             needed_libs,
-            capability,
             reader,
         })
     }
@@ -630,12 +506,6 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
             .map(|offset| string_at(&self.strtab, *offset).to_bytes())
     }
 
-    /// Returns the planning capability of this module.
-    #[inline]
-    pub const fn capability(&self) -> ModuleCapability {
-        self.capability
-    }
-
     /// Returns whether the module exposes a usable section-table view.
     #[inline]
     pub fn has_sections(&self) -> bool {
@@ -665,38 +535,18 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
     /// Iterates over sections that contribute to the loaded memory image.
     #[inline]
     pub fn alloc_sections(&self) -> impl Iterator<Item = ScannedSection<'_, Arch::Layout>> {
-        self.sections().filter(|section| section.is_allocated())
+        self.sections().allocated()
     }
 
     /// Iterates over retained relocation sections emitted into the section table.
     #[inline]
     pub fn relocation_sections(&self) -> impl Iterator<Item = ScannedSection<'_, Arch::Layout>> {
-        self.sections()
-            .filter(|section| section.is_relocation_section())
-    }
-
-    /// Captures one section's backing bytes.
-    pub(crate) fn section_data(&self, id: ElfSectionId) -> Result<Option<AlignedBytes>> {
-        let Some(section) = self.section(id) else {
-            return Ok(None);
-        };
-
-        if section.is_nobits() {
-            return Ok(Some(
-                AlignedBytes::with_len(section.size()).expect("failed to allocate section bytes"),
-            ));
-        }
-
-        Ok(Some(
-            self.read_bytes(section.file_offset(), section.size())?,
-        ))
-    }
-
-    #[inline]
-    fn read_bytes(&self, offset: usize, len: usize) -> Result<AlignedBytes> {
-        let mut bytes = AlignedBytes::with_len(len).ok_or(ParseDynamicError::AddressOverflow)?;
-        self.reader.read(bytes.as_mut(), offset)?;
-        Ok(bytes)
+        self.sections().filter(|section| {
+            matches!(
+                section.header().section_type(),
+                ElfSectionType::REL | ElfSectionType::RELA
+            )
+        })
     }
 
     pub(crate) fn into_load_parts(self) -> ScannedDynamicLoadParts<Arch> {
@@ -794,34 +644,8 @@ impl<Arch: RelocationArch> ScannedExec<Arch> {
     /// Iterates over sections that contribute to the loaded memory image.
     #[inline]
     pub fn alloc_sections(&self) -> impl Iterator<Item = ScannedSection<'_, Arch::Layout>> {
-        self.sections().filter(|section| section.is_allocated())
+        self.sections().allocated()
     }
-}
-
-fn classify_module_capability<Arch: RelocationArch>(
-    sections: &[ElfShdr<Arch::Layout>],
-) -> ModuleCapability {
-    if !Arch::SUPPORTS_SECTION_REORDER {
-        return ModuleCapability::SectionData;
-    }
-
-    for section in sections {
-        if !matches!(
-            section.section_type(),
-            ElfSectionType::REL | ElfSectionType::RELA
-        ) {
-            continue;
-        }
-
-        if !section.flags().contains(ElfSectionFlags::ALLOC)
-            && section.sh_info() != 0
-            && section.sh_link() != 0
-        {
-            return ModuleCapability::SectionReorderable;
-        }
-    }
-
-    ModuleCapability::SectionData
 }
 
 fn read_interp<L: ElfLayout>(

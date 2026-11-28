@@ -7,9 +7,8 @@ use crate::{
     arch::ArchKind,
     elf::{Elf32Layout, ElfLayout, ElfMachine, ElfRelEntry, ElfRela, ElfRelocationType, ElfWord},
     lazy::LazyPlacement,
-    linker::scan::PltArch,
     memory::{ImageMemory, ImageMemoryExt, RegionAccess},
-    relocation::{HandleResult, RelocationArch, RelocationEvent, RelocationValueProvider},
+    relocation::{HandleResult, RelocationArch, RelocationEvent},
     tls::TlsResolver,
 };
 
@@ -124,6 +123,3 @@ impl RelocationArch for XtensaArch {
         }
     }
 }
-
-impl RelocationValueProvider for XtensaArch {}
-impl PltArch for XtensaArch {}

@@ -1,10 +1,6 @@
 use crate::{
     Error, LinkerError, Result, UnresolvedDependency,
-    image::{Module, ModuleSearch, PathTokens, RawDynamic, ScannedDynamic},
-    input::ModuleSourceId,
-    memory::RegionAccess,
-    relocation::RelocationArch,
-    tls::TlsResolver,
+    image::{ModuleSearch, PathTokens},
 };
 use alloc::boxed::Box;
 
@@ -13,59 +9,6 @@ pub(crate) type LoaderVisitor<'visit> =
 pub(super) type LoaderProvider<'a> =
     dyn for<'visit> Fn(&mut LoaderVisitor<'visit>) -> Result<()> + 'a;
 
-pub(crate) trait DependencySource {
-    fn search(&self) -> &ModuleSearch;
-    fn source_id(&self) -> ModuleSourceId;
-    fn needed_len(&self) -> usize;
-    fn needed(&self, index: usize) -> Option<&[u8]>;
-}
-
-impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
-    DependencySource for RawDynamic<D, Arch, R, Tls>
-{
-    #[inline]
-    fn search(&self) -> &ModuleSearch {
-        Module::search(&***self).expect("ELF cores always retain filesystem search metadata")
-    }
-
-    #[inline]
-    fn source_id(&self) -> ModuleSourceId {
-        self.state().instance_id().source_id()
-    }
-
-    #[inline]
-    fn needed_len(&self) -> usize {
-        self.needed_libs().len()
-    }
-
-    #[inline]
-    fn needed(&self, index: usize) -> Option<&[u8]> {
-        self.needed_libs().get(index).copied()
-    }
-}
-
-impl<Arch: RelocationArch> DependencySource for ScannedDynamic<Arch> {
-    #[inline]
-    fn search(&self) -> &ModuleSearch {
-        ScannedDynamic::search(self)
-    }
-
-    #[inline]
-    fn source_id(&self) -> ModuleSourceId {
-        ScannedDynamic::source_id(self)
-    }
-
-    #[inline]
-    fn needed_len(&self) -> usize {
-        self.needed_libs().len()
-    }
-
-    #[inline]
-    fn needed(&self, index: usize) -> Option<&[u8]> {
-        self.needed_lib(index)
-    }
-}
-
 /// The input being resolved by a [`ResolveRequest`].
 pub enum ResolveInput<'a, Root> {
     /// A root supplied directly to a linker load operation.
@@ -73,7 +16,7 @@ pub enum ResolveInput<'a, Root> {
         /// Resolver-specific root input supplied by the caller.
         root: Root,
     },
-    /// One `DT_NEEDED` edge of an already scanned module.
+    /// One `DT_NEEDED` edge of an requesting module.
     Dependency {
         /// Library name stored in the owner's `DT_NEEDED` entry.
         needed: &'a [u8],

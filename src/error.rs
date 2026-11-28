@@ -658,6 +658,7 @@ pub(crate) enum RelocReason {
     Unsupported,
     MissingTlsModuleId,
     MissingTlsTpOffset,
+    #[cfg(feature = "object")]
     IntConversionOutOfRange,
 }
 
@@ -668,6 +669,7 @@ impl Display for RelocReason {
             Self::Unsupported => f.write_str("unsupported relocation"),
             Self::MissingTlsModuleId => f.write_str("TLS module id is unavailable"),
             Self::MissingTlsTpOffset => f.write_str("TLS thread-pointer offset is unavailable"),
+            #[cfg(feature = "object")]
             Self::IntConversionOutOfRange => {
                 f.write_str("out of range integral type conversion attempted")
             }
@@ -928,47 +930,6 @@ impl Display for LinkContextError {
     }
 }
 
-/// Structured scan/planned-load failure details.
-pub enum LinkScanError {
-    /// A requested materialization mode is invalid for the module/layout.
-    Materialization {
-        /// Static detail describing the materialization failure.
-        detail: &'static str,
-    },
-    /// Section data could not be materialized or borrowed as requested.
-    SectionData {
-        /// Static detail describing the section-data failure.
-        detail: &'static str,
-    },
-    /// Mapped section-arena memory is inconsistent with the layout plan.
-    MappedArena {
-        /// Static detail describing the mapped-arena failure.
-        detail: &'static str,
-    },
-    /// Runtime memory built for section-region materialization is invalid.
-    RuntimeMemory {
-        /// Static detail describing the runtime-memory failure.
-        detail: &'static str,
-    },
-    /// Runtime metadata repair failed after section-region mapping.
-    MetadataRewrite {
-        /// Static detail describing the metadata rewrite failure.
-        detail: &'static str,
-    },
-}
-
-impl Display for LinkScanError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Materialization { detail }
-            | Self::SectionData { detail }
-            | Self::MappedArena { detail }
-            | Self::RuntimeMemory { detail }
-            | Self::MetadataRewrite { detail } => f.write_str(detail),
-        }
-    }
-}
-
 /// Structured linker error details.
 pub enum LinkerError {
     /// A dependency could not be resolved by the resolver callback.
@@ -980,11 +941,6 @@ pub enum LinkerError {
         /// Structured context failure reason.
         reason: Box<LinkContextError>,
     },
-    /// Scan-first/planned-load state was inconsistent.
-    Scan {
-        /// Structured scan failure reason.
-        reason: Box<LinkScanError>,
-    },
 }
 
 impl LinkerError {
@@ -992,53 +948,6 @@ impl LinkerError {
     pub(crate) fn context(reason: LinkContextError) -> Self {
         Self::Context {
             reason: Box::new(reason),
-        }
-    }
-
-    #[inline]
-    pub(crate) fn materialization(detail: &'static str) -> Self {
-        Self::Scan {
-            reason: Box::new(LinkScanError::Materialization { detail }),
-        }
-    }
-
-    #[inline]
-    pub(crate) fn section_data(detail: &'static str) -> Self {
-        Self::Scan {
-            reason: Box::new(LinkScanError::SectionData { detail }),
-        }
-    }
-
-    #[inline]
-    pub(crate) fn duplicate_section_data_access() -> Self {
-        Self::section_data(
-            "disjoint section data access referenced the same section more than once",
-        )
-    }
-
-    #[inline]
-    pub(crate) fn missing_section_data_access() -> Self {
-        Self::section_data("disjoint section data access was not materialized")
-    }
-
-    #[inline]
-    pub(crate) fn mapped_arena(detail: &'static str) -> Self {
-        Self::Scan {
-            reason: Box::new(LinkScanError::MappedArena { detail }),
-        }
-    }
-
-    #[inline]
-    pub(crate) fn runtime_memory(detail: &'static str) -> Self {
-        Self::Scan {
-            reason: Box::new(LinkScanError::RuntimeMemory { detail }),
-        }
-    }
-
-    #[inline]
-    pub(crate) fn metadata_rewrite(detail: &'static str) -> Self {
-        Self::Scan {
-            reason: Box::new(LinkScanError::MetadataRewrite { detail }),
         }
     }
 }
@@ -1049,7 +958,6 @@ impl Display for LinkerError {
             Self::UnresolvedDependency(err) => Display::fmt(err, f),
             Self::RootNotFound => f.write_str("root module was not found by resolver"),
             Self::Context { reason } => Display::fmt(reason, f),
-            Self::Scan { reason } => Display::fmt(reason, f),
         }
     }
 }
@@ -1185,7 +1093,7 @@ pub enum Error {
     /// An error occurred while parsing ELF notes.
     ParseNote(ParseNoteError),
 
-    /// An error occurred during linker resolution, planning, or materialization.
+    /// An error occurred while resolving or publishing a module group.
     Linker(LinkerError),
 
     /// An error occurred while executing mapped code.
@@ -1373,7 +1281,6 @@ debug_as_display!(
     UnresolvedDependency,
     LinkerError,
     LinkContextError,
-    LinkScanError,
     TlsError,
     Error,
 );

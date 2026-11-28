@@ -6,10 +6,9 @@ use crate::Result;
 use crate::arch::{ArchKind, riscv};
 use crate::elf::{Elf32Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::lazy::LazyPlacement;
-use crate::linker::scan::PltArch;
 #[cfg(feature = "object")]
 use crate::relocation::ObjectRelocation;
-use crate::relocation::{RelocationArch, RelocationValueProvider};
+use crate::relocation::RelocationArch;
 
 /// RISC-V 32-bit architecture marker.
 #[derive(Debug, Clone, Copy, Default)]
@@ -72,6 +71,3 @@ impl RelocationArch for RiscV32Arch {
 impl ObjectRelocation for RiscV32Arch {
     type State = ();
 }
-
-impl RelocationValueProvider for RiscV32Arch {}
-impl PltArch for RiscV32Arch {}

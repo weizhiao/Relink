@@ -157,15 +157,6 @@ where
     {
         let object = input.into_reader()?;
         let ehdr = self.read_ehdr(&object)?;
-        self.scan_with_ehdr(Box::new(object), ehdr)
-    }
-
-    /// Reuses a header already validated for this architecture.
-    pub(crate) fn scan_with_ehdr(
-        &mut self,
-        object: Box<dyn ElfReader>,
-        ehdr: ElfHeader<Arch::Layout>,
-    ) -> Result<ScannedElf<Arch>> {
         logging::debug!("Scanning ELF metadata: {}", object.path());
 
         if !ExpectedElf::Executable.matches(&ehdr) {
@@ -179,7 +170,7 @@ where
             path,
             ehdr,
             phdrs,
-            reader: object,
+            reader: Box::new(object),
         };
 
         if has_dynamic {

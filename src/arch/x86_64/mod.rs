@@ -7,7 +7,6 @@
 mod lazy;
 #[cfg(feature = "object")]
 pub(crate) mod object;
-mod plt;
 #[cfg(target_arch = "x86_64")]
 mod tls;
 

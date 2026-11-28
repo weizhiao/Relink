@@ -27,7 +27,7 @@ pub use module::{
     GlobalScope, LocalScope, ModuleHandle, ModuleInstanceId, ModuleScope, ModuleState,
 };
 pub(crate) use scanned::ScannedDynamicLoadParts;
-pub use scanned::{ModuleCapability, ScannedDynamic, ScannedElf, ScannedExec, ScannedSection};
+pub use scanned::{ScannedDynamic, ScannedElf, ScannedExec, ScannedSection};
 pub use search::{ModuleSearch, PathTokens, SearchPathPool};
 pub(crate) use search::{SharedDir, default_module_search, library_path_components, normalize_dir};
 pub use symbol_name::SymbolName;

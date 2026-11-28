@@ -1,23 +1,17 @@
 use super::{
     resolver::{
-        DependencySource, KeyResolver, LoaderVisitor, ResolveRequest, ResolvedDependency,
-        ResolvedKey, ResolvedKind,
+        KeyResolver, LoaderVisitor, ResolveRequest, ResolvedDependency, ResolvedKey, ResolvedKind,
     },
     session::ResolveSession,
     storage::{CommittedStorage, ModuleKey, ModuleSlot},
 };
 use crate::{
-    LoaderRun, ParsePhdrError, Result,
-    arch::NativeArch,
-    elf::ElfHeader,
+    LoaderRun, Result,
     entity::EntitySet,
-    image::{
-        ModuleHandle, ModuleSearch, PathTokens, RawDynamic, ScannedDynamic, ScannedElf,
-        default_module_search,
-    },
-    input::{ElfReader, ModuleSourceId},
-    memory::{HostRegion, RegionAccess},
-    observer::{LinkerObserver, LoadObserver},
+    image::{ModuleHandle, ModuleSearch, PathTokens, RawDynamic, default_module_search},
+    input::ModuleSourceId,
+    memory::RegionAccess,
+    observer::LoadObserver,
     os::Mmap,
     relocation::RelocationArch,
     tls::TlsResolver,
@@ -44,26 +38,30 @@ fn search_aliases(
     (path, soname)
 }
 
-pub(crate) struct ResolveContext<'a, Arch: RelocationArch = NativeArch, P = (), Meta = ()> {
+pub(super) struct ResolveContext<
+    'a,
+    D: Send + Sync + 'static,
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch>,
+    Meta,
+> {
     committed: &'a mut CommittedStorage<Meta, Arch>,
-    session: &'a mut ResolveSession<P, Arch>,
+    session: &'a mut ResolveSession<D, Arch, R, Tls>,
     tokens: PathTokens,
 }
 
-pub(crate) type LoadResolveContext<'a, D, Arch = NativeArch, R = HostRegion, Tls = (), Meta = ()> =
-    ResolveContext<'a, Arch, RawDynamic<D, Arch, R, Tls>, Meta>;
-
-pub(crate) type ScanResolveContext<'a, Arch = NativeArch, Meta = ()> =
-    ResolveContext<'a, Arch, ScannedDynamic<Arch>, Meta>;
-
-impl<'a, Arch, P, Meta> ResolveContext<'a, Arch, P, Meta>
+impl<'a, D, Arch, R, Tls, Meta> ResolveContext<'a, D, Arch, R, Tls, Meta>
 where
+    D: Default + Send + Sync + 'static,
     Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
-    pub(crate) fn new(
+    pub(super) fn new(
         committed: &'a mut CommittedStorage<Meta, Arch>,
-        session: &'a mut ResolveSession<P, Arch>,
+        session: &'a mut ResolveSession<D, Arch, R, Tls>,
         tokens: PathTokens,
     ) -> Self {
         Self {
@@ -72,13 +70,7 @@ where
             tokens,
         }
     }
-}
 
-impl<Arch, P, Meta> ResolveContext<'_, Arch, P, Meta>
-where
-    Arch: RelocationArch,
-    P: DependencySource,
-{
     fn known_module(&self, key: &[u8]) -> Option<ModuleSlot> {
         self.committed
             .module_for_key(key)
@@ -91,14 +83,14 @@ where
             .or_else(|| self.session.module_for_source(id))
     }
 
-    pub(crate) fn stage_dynamic(
+    pub(super) fn stage_dynamic(
         &mut self,
         entry_key: ModuleKey,
-        payload: P,
+        payload: RawDynamic<D, Arch, R, Tls>,
         loader: Option<ModuleSlot>,
     ) -> ModuleSlot {
-        let source = payload.source_id();
-        let (path, soname) = search_aliases(payload.search(), &entry_key);
+        let source = payload.state().instance_id().source_id();
+        let (path, soname) = search_aliases(&payload.search, &entry_key);
         let (slot, generation) = self.session.reserve_source(self.committed, source, loader);
         self.session
             .stage_dynamic(slot, generation, entry_key.clone(), payload);
@@ -137,13 +129,17 @@ where
         slot
     }
 
-    fn stage_with<'cfg>(
+    fn stage<Obs, M>(
         &mut self,
         entry_key: ModuleKey,
-        resolved: ResolvedKey<'cfg, Arch>,
+        resolved: ResolvedKey<'_, Arch>,
         parent: Option<ModuleSlot>,
-        materialize: &mut impl FnMut(Box<dyn ElfReader + 'cfg>, ElfHeader<Arch::Layout>) -> Result<P>,
-    ) -> Result<ModuleSlot> {
+        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M>,
+    ) -> Result<ModuleSlot>
+    where
+        Obs: LoadObserver<D, Arch>,
+        M: Mmap<Region = R>,
+    {
         let (resolved, pinned, aliases) = resolved.into_parts();
         let mut module_deps = None;
         let slot = if let Some(slot) = self.known_module(&entry_key) {
@@ -155,7 +151,7 @@ where
                         self.session.bind_key(entry_key, slot);
                         slot
                     } else {
-                        let payload = materialize(reader, ehdr)?;
+                        let payload = loader.load_dynamic_with_ehdr(reader, ehdr)?;
                         self.stage_dynamic(entry_key, payload, parent)
                     }
                 }
@@ -179,7 +175,7 @@ where
         if let Some(deps) = module_deps {
             let mut direct_deps = Vec::with_capacity(deps.len());
             for ResolvedDependency { key, resolved } in deps {
-                let dep = self.stage_with(key, resolved, Some(slot), materialize)?;
+                let dep = self.stage(key, resolved, Some(slot), loader)?;
                 push_dep(&mut direct_deps, dep);
             }
             self.session
@@ -201,7 +197,7 @@ where
             .map(|module| module.direct_deps())
     }
 
-    fn source(&self, slot: ModuleSlot) -> &P {
+    fn source(&self, slot: ModuleSlot) -> &RawDynamic<D, Arch, R, Tls> {
         self.session
             .dynamic_payload(slot)
             .expect("dependency source must be present for a staged dynamic module")
@@ -210,7 +206,7 @@ where
     fn search(&self, slot: ModuleSlot) -> Option<&ModuleSearch> {
         self.session
             .dynamic_payload(slot)
-            .map(DependencySource::search)
+            .map(|raw| &raw.search)
             .or_else(|| self.session.staged_module(slot)?.search())
             .or_else(|| {
                 self.committed
@@ -257,7 +253,7 @@ where
         resolver.resolve(req)
     }
 
-    pub(crate) fn resolve_committed_root<Resolver>(
+    pub(super) fn resolve_committed_root<Resolver>(
         &self,
         root: Resolver::Root,
         caller: Option<ModuleSlot>,
@@ -275,25 +271,16 @@ where
         Ok(self.module_for_source(source))
     }
 
-    fn direct_deps_for<'cfg, Tls: TlsResolver<Arch>, D, Obs, F, M, Resolver>(
+    fn direct_deps_for<Obs, M, Resolver>(
         &mut self,
         slot: ModuleSlot,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M>,
         resolver: &Resolver,
-        stage: &mut F,
     ) -> Result<&[ModuleSlot]>
     where
-        D: Send + Sync + 'static,
         Resolver: KeyResolver<Arch>,
-        Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
-        M: Mmap,
-        F: FnMut(
-            &mut Self,
-            ModuleKey,
-            ResolvedKey<'cfg, Arch>,
-            ModuleSlot,
-            &mut LoaderRun<'_, Obs, D, Tls, Arch, M>,
-        ) -> Result<ModuleSlot>,
+        Obs: LoadObserver<D, Arch>,
+        M: Mmap<Region = R>,
     {
         if !self.session.contains_pending(slot) && self.committed.contains_module(slot) {
             self.session.track(slot, self.committed.generation(slot));
@@ -309,15 +296,13 @@ where
             }
         }
         if self.known_direct_deps(slot).is_none() {
-            let needed_len = self.source(slot).needed_len();
+            let needed_len = self.source(slot).needed_libs().len();
             let mut direct_deps = Vec::with_capacity(needed_len);
             for idx in 0..needed_len {
-                let resolved = {
+                let (request_key, resolved) = {
                     let source = self.source(slot);
-                    let search = source.search();
-                    let needed = source
-                        .needed(idx)
-                        .expect("DT_NEEDED index must be within the parsed dependency list");
+                    let search = &source.search;
+                    let needed = source.needed_libs()[idx];
                     let existing = self.known_module(needed).or_else(|| {
                         let canonical = resolver.normalize_key(needed);
                         (canonical != needed)
@@ -334,8 +319,7 @@ where
                     let resolved = resolver.resolve(req)?;
                     (ModuleKey::from(needed), resolved)
                 };
-                let (request_key, resolved) = resolved;
-                let dep = stage(self, request_key, resolved, slot, loader)?;
+                let dep = self.stage(request_key, resolved, Some(slot), loader)?;
                 push_dep(&mut direct_deps, dep);
             }
             self.session.set_direct_deps(slot, direct_deps);
@@ -345,25 +329,16 @@ where
             .expect("resolved module must retain its direct dependencies"))
     }
 
-    fn resolve_dependency_graph_with<'cfg, Tls: TlsResolver<Arch>, D, Obs, F, M, Resolver>(
+    pub(super) fn resolve_graph<Obs, M, Resolver>(
         &mut self,
         root: ModuleSlot,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M>,
         resolver: &Resolver,
-        mut stage: F,
     ) -> Result<()>
     where
-        D: Send + Sync + 'static,
         Resolver: KeyResolver<Arch>,
-        Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
-        M: Mmap,
-        F: FnMut(
-            &mut Self,
-            ModuleKey,
-            ResolvedKey<'cfg, Arch>,
-            ModuleSlot,
-            &mut LoaderRun<'_, Obs, D, Tls, Arch, M>,
-        ) -> Result<ModuleSlot>,
+        Obs: LoadObserver<D, Arch>,
+        M: Mmap<Region = R>,
     {
         if !self.session.contains_pending(root) {
             self.session.track(root, self.committed.generation(root));
@@ -378,7 +353,7 @@ where
         while cursor < group_order.len() {
             let slot = group_order[cursor];
             cursor += 1;
-            for &dep in self.direct_deps_for(slot, loader, resolver, &mut stage)? {
+            for &dep in self.direct_deps_for(slot, loader, resolver)? {
                 if visited.insert(dep) {
                     group_order.push(dep);
                 }
@@ -387,16 +362,8 @@ where
         self.session.set_group_order(group_order);
         Ok(())
     }
-}
 
-impl<D: Send + Sync + 'static, Arch, R, Tls, Meta>
-    ResolveContext<'_, Arch, RawDynamic<D, Arch, R, Tls>, Meta>
-where
-    Arch: RelocationArch,
-    R: RegionAccess,
-    Tls: TlsResolver<Arch>,
-{
-    pub(crate) fn resolve_root<Obs, M, Resolver>(
+    pub(super) fn resolve_root<Obs, M, Resolver>(
         &mut self,
         root: Resolver::Root,
         request_key: ModuleKey,
@@ -405,118 +372,13 @@ where
         resolver: &Resolver,
     ) -> Result<ModuleSlot>
     where
-        D: Default,
         Resolver: KeyResolver<Arch>,
-        Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
+        Obs: LoadObserver<D, Arch>,
         M: Mmap<Region = R>,
     {
         let resolved = self.resolve_root_input(root, caller, resolver)?;
         let root = self.stage(request_key, resolved, caller, loader)?;
         self.resolve_graph(root, loader, resolver)?;
         Ok(root)
-    }
-
-    pub(crate) fn stage<'cfg, Obs, M>(
-        &mut self,
-        entry_key: ModuleKey,
-        resolved: ResolvedKey<'cfg, Arch>,
-        parent: Option<ModuleSlot>,
-        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M>,
-    ) -> Result<ModuleSlot>
-    where
-        D: Default,
-        Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
-        Tls: TlsResolver<Arch>,
-        M: Mmap<Region = R>,
-    {
-        self.stage_with(entry_key, resolved, parent, &mut |reader, ehdr| {
-            loader.load_dynamic_with_ehdr(reader, ehdr)
-        })
-    }
-
-    pub(super) fn resolve_graph<Obs, M, Resolver>(
-        &mut self,
-        root: ModuleSlot,
-        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M>,
-        resolver: &Resolver,
-    ) -> Result<()>
-    where
-        Resolver: KeyResolver<Arch>,
-        D: Default,
-        Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
-        Tls: TlsResolver<Arch>,
-        M: Mmap<Region = R>,
-    {
-        self.resolve_dependency_graph_with(
-            root,
-            loader,
-            resolver,
-            |ctx, key, resolved, parent, loader| ctx.stage(key, resolved, Some(parent), loader),
-        )
-    }
-}
-
-impl<Arch, Meta> ResolveContext<'_, Arch, ScannedDynamic<Arch>, Meta>
-where
-    Arch: RelocationArch,
-{
-    pub(crate) fn resolve_root<Tls: TlsResolver<Arch>, D, Obs, M, Resolver>(
-        &mut self,
-        root: Resolver::Root,
-        request_key: ModuleKey,
-        caller: Option<ModuleSlot>,
-        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M>,
-        resolver: &Resolver,
-    ) -> Result<ModuleSlot>
-    where
-        D: Default + Send + Sync + 'static,
-        Resolver: KeyResolver<Arch>,
-        Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
-        M: Mmap,
-    {
-        let resolved = self.resolve_root_input(root, caller, resolver)?;
-        let root = self.stage(request_key, resolved, caller, loader)?;
-        self.resolve_graph(root, loader, resolver)?;
-        Ok(root)
-    }
-
-    pub(crate) fn stage<Tls: TlsResolver<Arch>, D, Obs, M>(
-        &mut self,
-        entry_key: ModuleKey,
-        resolved: ResolvedKey<'static, Arch>,
-        parent: Option<ModuleSlot>,
-        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M>,
-    ) -> Result<ModuleSlot>
-    where
-        D: Default + Send + Sync + 'static,
-        Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
-        M: Mmap,
-    {
-        self.stage_with(entry_key, resolved, parent, &mut |reader, ehdr| {
-            let ScannedElf::Dynamic(module) = loader.scan_with_ehdr(reader, ehdr)? else {
-                return Err(ParsePhdrError::MissingDynamicSection.into());
-            };
-            Ok(module)
-        })
-    }
-
-    fn resolve_graph<Tls: TlsResolver<Arch>, D, Obs, M, Resolver>(
-        &mut self,
-        root: ModuleSlot,
-        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M>,
-        resolver: &Resolver,
-    ) -> Result<()>
-    where
-        D: Default + Send + Sync + 'static,
-        Resolver: KeyResolver<Arch>,
-        Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
-        M: Mmap,
-    {
-        self.resolve_dependency_graph_with(
-            root,
-            loader,
-            resolver,
-            |ctx, key, resolved, parent, loader| ctx.stage(key, resolved, Some(parent), loader),
-        )
     }
 }

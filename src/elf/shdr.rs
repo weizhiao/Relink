@@ -5,7 +5,6 @@ use super::{
     raw::ElfShdrRaw,
     symbol::ElfSectionIndex,
 };
-use crate::entity::EntityRef;
 use bitflags::bitflags;
 use core::fmt::{self, Display};
 use elf::abi::*;
@@ -145,18 +144,6 @@ impl ElfSectionId {
         } else {
             Some(Self::new(index.index()))
         }
-    }
-}
-
-impl EntityRef for ElfSectionId {
-    #[inline]
-    fn new(index: usize) -> Self {
-        Self(index)
-    }
-
-    #[inline]
-    fn index(self) -> usize {
-        self.0
     }
 }
 

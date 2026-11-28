@@ -143,13 +143,6 @@ pub mod xtensa;
 cfg_if::cfg_if! {
     if #[cfg(target_arch = "x86_64")]{
         pub use x86_64::*;
-        // The host's architecture marker is republished as
-        // `crate::arch::NativeArch`. Every architecture-specific trait impl
-        // (`RelocationArch`, `RelocationValueProvider`, `PltArch`)
-        // lives on this single ZST in `arch/<host>/relocation.rs`. Because
-        // `SUPPORTS_NATIVE_RUNTIME` on each per-ISA ZST is `cfg!(target_arch
-        // = "<isa>")`, this re-export is the only place that turns "host
-        // runtime hooks enabled" on.
         pub use x86_64::X86_64Arch as NativeArch;
     }else if #[cfg(target_arch = "riscv64")]{
         pub use riscv64::*;

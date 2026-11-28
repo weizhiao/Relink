@@ -29,7 +29,6 @@ Relink 是用 Rust 编写的 ELF 加载器与运行时链接器，面向插件�
 
 - **多种输入**：从文件或内存加载共享库、可执行文件与可重定位目标文件（`.o` / `.ko`）。
 - **链接策略可控**：自定义依赖解析、符号作用域和重定位，通过 observer 跟踪或干预加载过程。
-- **加载前优化**：先扫描再布局，支持 section 重排与热代码聚集；架构范围见[平台支持](#平台支持)。
 - **适配你的运行时**：支持 `no_std`，可替换 mmap 与内存访问后端，接入内核、嵌入式或远程内存。
 
 ## 基准测试
@@ -98,20 +97,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-更多用法：[内存加载](https://github.com/weizhiao/Relink/blob/main/examples/load_from_memory.rs) · [目标文件](https://github.com/weizhiao/Relink/blob/main/examples/load_object.rs) · [布局重排](https://github.com/weizhiao/Relink/blob/main/examples/linker_scan_first.rs) · [宿主库导入](https://github.com/weizhiao/Relink/blob/main/examples/host_import.rs)。
+更多用法：[内存加载](https://github.com/weizhiao/Relink/blob/main/examples/load_from_memory.rs) · [目标文件](https://github.com/weizhiao/Relink/blob/main/examples/load_object.rs) · [宿主库导入](https://github.com/weizhiao/Relink/blob/main/examples/host_import.rs)。
 
 ## 平台支持
 
-| 指令集 | 动态库 / 可执行文件 | Section 重排 | `.o` / `ET_REL` |
-| --- | --- | --- | --- |
-| `x86_64` | ✅ | ✅ | ✅ |
-| `x86` | ✅ | 🚧 | 🚧 |
-| `aarch64` | ✅ | 🚧 | 🚧 |
-| `arm` | ✅ | 🚧 | 🚧 |
-| `riscv64` | ✅ | 🚧 | ✅ |
-| `riscv32` | ✅ | 🚧 | 🚧 |
-| `loongarch64` | ✅ | 🚧 | 🚧 |
-| `xtensa` | 🔧 | 🚧 | 🚧 |
+| 指令集 | 动态库 / 可执行文件 | `.o` / `ET_REL` |
+| --- | --- | --- |
+| `x86_64` | ✅ | ✅ |
+| `x86` | ✅ | 🚧 |
+| `aarch64` | ✅ | 🚧 |
+| `arm` | ✅ | 🚧 |
+| `riscv64` | ✅ | ✅ |
+| `riscv32` | ✅ | 🚧 |
+| `loongarch64` | ✅ | 🚧 |
+| `xtensa` | 🔧 | 🚧 |
 
 ✅ 支持 · 🔧 部分支持 · 🚧 待补齐。
 

@@ -2,7 +2,7 @@ use super::unload::{UnloadGroup, UnloadedModule};
 use crate::{
     LinkContextError, LinkerError, Result,
     arch::NativeArch,
-    entity::{EntitySet, PrimaryMap, entity_ref},
+    entity::{EntityRef, EntitySet, PrimaryMap},
     image::{ModuleHandle, ModuleInstanceId, ModuleScope},
     input::{ModuleSourceId, Path, PathBuf},
     linker::AddressIndex,
@@ -141,7 +141,16 @@ impl Display for ContextId {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(in crate::linker) struct ModuleSlot(usize);
-entity_ref!(ModuleSlot);
+
+impl EntityRef for ModuleSlot {
+    fn new(index: usize) -> Self {
+        Self(index)
+    }
+
+    fn index(self) -> usize {
+        self.0
+    }
+}
 
 /// Identity of one committed module incarnation in a
 /// [`LinkContext`](super::LinkContext).

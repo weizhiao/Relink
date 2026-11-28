@@ -1,7 +1,6 @@
 use super::{
     context::LinkContext,
     run::LinkerRun,
-    scan::LinkPipeline,
     storage::{LeaseError, ModuleId, ModuleLease},
     unload::UnloadGroup,
 };
@@ -263,12 +262,9 @@ where
 
     /// Starts a linker run with fresh scratch storage.
     #[inline]
-    pub fn run<'pipe, Tls: TlsResolver<Arch>>(
-        &self,
-    ) -> LinkerRun<'_, 'pipe, Arch, L, R, RelocBinder, Tls, ()> {
+    pub fn run(&self) -> LinkerRun<'_, Arch, L, R, RelocBinder> {
         LinkerRun {
             linker: self,
-            pipeline: LinkPipeline::new(),
             observer: (),
             caller: None,
             lookup_order: LookupOrder::GlobalFirst,

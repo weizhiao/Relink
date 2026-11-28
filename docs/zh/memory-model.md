@@ -56,9 +56,9 @@ assert_eq!(addr.get(), 0x401000);
 
 ## 镜像地址转换
 
-`ElfSegments` 保存加载基址、底层 `MappedRegion` 和相对镜像的 `MappedRange` 列表。
-底层区域虽然连续，镜像的有效映射范围可以不连续。访问时先检查请求范围是否属于镜像，
-再将地址换算为底层区域内的偏移。
+`ElfSegments` 表示由一个 `MappedRegion` 支撑的连续地址区间。
+`ElfSegments::range()` 按值返回 `MappedRange`，其中 `offset` 是相对镜像基址的偏移，
+`len` 是字节数。区间内各个 `PT_LOAD` 段可以有不同的页权限。
 
 `ImageMemory` 提供基于地址的范围查询、字节访问和可选的宿主指针。
 `ImageMemoryExt` 提供类型化访问方法，使 `ImageMemory` 本身仍可作为 trait object 使用。

@@ -12,25 +12,23 @@ architecture and calling convention:
 mkdir -p target/example-library
 cc -c -fPIC -fno-stack-protector -fno-asynchronous-unwind-tables \
   examples/library/example.c -o target/example-library/example.o
-cc -shared -nostdlib -Wl,--emit-relocs target/example-library/example.o \
+cc -shared -nostdlib target/example-library/example.o \
   -o target/example-library/libexample.so
 ```
 
 ## Run
 
-The six basic examples use fixed paths under `target/example-library`:
+The five basic examples use fixed paths under `target/example-library`:
 
 ```sh
 cargo run --example load_dylib
 cargo run --example load_from_memory
 cargo run --example load_object
 cargo run --example linker_load
-cargo run --example linker_scan_first
 cargo run --example observer
 ```
 
-`load_object` requires `object` (enabled by default). `linker_scan_first` requires
-x86-64 and the retained relocations produced above; do not strip the library.
+`load_object` requires `object` (enabled by default).
 Function calls print `example_add(2, 3) = 5` or `example_value() = 7`.
 
 ## Host imports
