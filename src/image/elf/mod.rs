@@ -122,9 +122,9 @@ impl<D: Send + Sync + 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolv
         }
     }
 
-    /// Returns the PT_INTERP value.
+    /// Returns the bytes of the interpreter path, excluding the NUL terminator.
     #[inline]
-    pub fn interp(&self) -> Option<&str> {
+    pub fn interp(&self) -> Option<&[u8]> {
         match self {
             RawElf::Dylib(dylib) => dylib.interp(),
             RawElf::Exec(exec) => exec.interp(),

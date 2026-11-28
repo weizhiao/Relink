@@ -11,7 +11,7 @@ use crate::{
     logging,
     memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr, VmOffset},
     observer::LifecycleHandlers,
-    relocation::{LookupOrder, RelocationArch, SymbolRegistry, SymbolResolver},
+    relocation::{LookupOrder, RelocationArch, SymbolRegistry, SymbolSearch},
     runtime::{CodeContext, CodeExecutor, Domain, DomainId},
     segment::{ElfSegments, MappedRange},
     sync::{OnceCell, Weak},
@@ -142,15 +142,9 @@ where
         let global_guard = global.as_ref().map(GlobalScope::read);
         let symbolic = self.dynamic_info.as_ref().is_some_and(|info| info.symbolic);
         let symbols = lazy.symbols.as_ref().and_then(Weak::upgrade);
-        let resolver = SymbolResolver::new(
-            &source,
-            &lookup,
-            global_guard.as_deref(),
-            symbols.as_deref(),
-            symbolic,
-            lazy.order,
-        );
-        let Some(symdef) = resolver.find(symbol) else {
+        let search = SymbolSearch::new(&source, symbols.as_deref(), symbolic);
+        let Some(symdef) = search.find_lazy(symbol, &lookup, global_guard.as_deref(), lazy.order)
+        else {
             return Ok(None);
         };
         let effect = symdef.effect(source.as_ref());

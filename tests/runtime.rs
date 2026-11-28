@@ -34,6 +34,7 @@ fn load_plugin() -> Result<()> {
     // Holding the dependency open lets us inspect it after unloading the plugin.
     let points = linker.run().load(&mut context, points)?;
     assert_eq!(context.module_loader(points.root())?, Some(caller.owner));
+    let plugin = plugin.release(&mut target).unwrap_err().acquisition;
     drop(plugin.release(&mut context)?);
     assert_eq!(context.module_loader(points.root())?, None);
     drop(points.release(&mut context)?);
@@ -44,8 +45,27 @@ fn load_plugin() -> Result<()> {
     let module = target.module(imported.id())?;
     let score = unsafe { module.get::<extern "C" fn() -> i32>("score") }?.unwrap();
     assert_eq!(score(), 42);
+    let imported = context.pin(imported).unwrap_err().acquisition;
     drop(target.release(imported)?);
     assert!(target.is_empty());
+    Ok(())
+}
+
+#[test]
+fn interpreter_path() -> Result<()> {
+    use elf_loader::{AddressSpaceId, Domain, Loader};
+
+    let path = compile(
+        "tests/fixtures/interpreter.c",
+        "interpreter.so",
+        &["-fPIC", "-shared"],
+    );
+    let loader = Loader::new();
+    let mut run = loader.run(Domain::native(AddressSpaceId::PROCESS));
+    let scanned = run.scan(path.clone())?;
+    let mapped = run.load(path)?;
+    assert_eq!(scanned.interp(), Some(b"/runtime/\xff".as_slice()));
+    assert_eq!(mapped.interp(), scanned.interp());
     Ok(())
 }
 

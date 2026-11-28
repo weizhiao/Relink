@@ -1,4 +1,6 @@
-use super::storage::{CommittedStorage, ContextId, ModuleId, ModuleKey, ModuleLease};
+use super::storage::{
+    CommittedStorage, ContextId, LeaseError, ModuleId, ModuleKey, ModuleLease, ModuleSlot,
+};
 use super::unload::UnloadGroup;
 use crate::{
     Result,
@@ -266,14 +268,23 @@ where
         Ok(ModuleLease::new(id))
     }
 
+    fn lease_slot(&self, lease: ModuleLease) -> core::result::Result<ModuleSlot, LeaseError> {
+        self.committed
+            .module_slot(lease.id())
+            .map_err(|error| LeaseError {
+                error,
+                acquisition: lease,
+            })
+    }
+
     /// Converts one direct acquisition into a permanent context root.
     ///
     /// A pinned module and its dependency closure remain committed until the
     /// context itself is dropped. Pinning an already pinned module is
     /// idempotent, but still consumes the supplied acquisition.
-    pub fn pin(&mut self, lease: ModuleLease) -> Result<()> {
-        let id = lease.id();
-        let slot = self.committed.module_slot(id)?;
+    /// A rejected lease is returned in [`LeaseError::acquisition`].
+    pub fn pin(&mut self, lease: ModuleLease) -> core::result::Result<(), LeaseError> {
+        let slot = self.lease_slot(lease)?;
         let mut module = self
             .committed
             .module_mut(slot)
@@ -346,9 +357,12 @@ where
     ///
     /// The returned collection keeps the entire unload group alive. Drop it
     /// after releasing any external registry lock to run pending finalizers.
-    pub fn release(&mut self, lease: ModuleLease) -> Result<UnloadGroup<Meta, Arch>> {
-        let id = lease.id();
-        let slot = self.committed.module_slot(id)?;
+    /// A rejected lease is returned in [`LeaseError::acquisition`].
+    pub fn release(
+        &mut self,
+        lease: ModuleLease,
+    ) -> core::result::Result<UnloadGroup<Meta, Arch>, LeaseError> {
+        let slot = self.lease_slot(lease)?;
         let refs = self
             .committed
             .module_mut(slot)

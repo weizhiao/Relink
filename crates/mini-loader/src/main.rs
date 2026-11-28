@@ -12,7 +12,7 @@ use elf_loader::{
     arch::NativeArch,
     elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfRela},
     image::RawElf,
-    input::ElfFile,
+    input::{ElfFile, Path},
     memory::VmAddr,
     relocation::RelocationArch,
 };
@@ -56,9 +56,9 @@ fn print_decimal(mut value: usize) {
 }
 
 #[inline(always)]
-fn load_elf(name: &str) -> Result<RawElf<()>> {
+fn load_elf(name: &[u8]) -> Result<RawElf<()>> {
     let loader = Loader::new();
-    let object = ElfFile::from_path(name)?;
+    let object = ElfFile::from_path(Path::new(name))?;
     loader
         .run(Domain::native(AddressSpaceId::PROCESS))
         .load(object)
@@ -186,8 +186,7 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut ElfDyn) {
     let elf_name_raw = unsafe { argv.add(1).read() as *const i8 };
     let elf_name = unsafe { CStr::from_ptr(elf_name_raw as _) };
 
-    let elf_name = expect_ok(elf_name.to_str(), "input path is not valid UTF-8\n");
-    let elf = expect_ok(load_elf(elf_name), "failed to load input ELF\n");
+    let elf = expect_ok(load_elf(elf_name.to_bytes()), "failed to load input ELF\n");
     let mut interp_dylib = None;
     // 加载动态加载器ld.so，如果有的话
     if let Some(interp_name) = elf.interp() {

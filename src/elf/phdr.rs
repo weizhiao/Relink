@@ -12,6 +12,16 @@ use bitflags::bitflags;
 use core::fmt::{self, Display};
 use elf::abi::*;
 
+pub(crate) fn parse_interp(bytes: &[u8]) -> crate::Result<&[u8]> {
+    let path = core::ffi::CStr::from_bytes_until_nul(bytes)
+        .map_err(|_| crate::ParsePhdrError::malformed("PT_INTERP is missing a NUL terminator"))?
+        .to_bytes();
+    if path.is_empty() {
+        return Err(crate::ParsePhdrError::malformed("PT_INTERP is empty").into());
+    }
+    Ok(path)
+}
+
 /// Semantic wrapper for the ELF `p_type` field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]

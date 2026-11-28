@@ -429,7 +429,7 @@ impl<Arch: RelocationArch> ScannedElf<Arch> {
         }
     }
 
-    /// Returns the PT_INTERP string when present.
+    /// Returns the bytes of the interpreter path, excluding the NUL terminator.
     #[inline]
     pub fn interp(&self) -> Option<&[u8]> {
         match self {
@@ -596,7 +596,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
         &self.phdrs
     }
 
-    /// Returns the PT_INTERP string when present.
+    /// Returns the bytes of the interpreter path, excluding the NUL terminator.
     #[inline]
     pub fn interp(&self) -> Option<&[u8]> {
         self.interp.as_deref()
@@ -759,7 +759,7 @@ impl<Arch: RelocationArch> ScannedExec<Arch> {
         &self.phdrs
     }
 
-    /// Returns the PT_INTERP string when present.
+    /// Returns the bytes of the interpreter path, excluding the NUL terminator.
     #[inline]
     pub fn interp(&self) -> Option<&[u8]> {
         self.interp.as_deref()
@@ -836,9 +836,8 @@ fn read_interp<L: ElfLayout>(
     };
 
     let mut bytes = object.read_to_vec(interp.p_offset(), interp.p_filesz())?;
-    if let Some(end) = bytes.iter().position(|byte| *byte == 0) {
-        bytes.truncate(end);
-    }
+    let len = crate::elf::parse_interp(&bytes)?.len();
+    bytes.truncate(len);
     Ok(Some(bytes.into_boxed_slice()))
 }
 

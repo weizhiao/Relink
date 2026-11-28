@@ -145,7 +145,7 @@ cfg_if::cfg_if! {
         pub use x86_64::*;
         // The host's architecture marker is republished as
         // `crate::arch::NativeArch`. Every architecture-specific trait impl
-        // (`RelocationArch`, `RelocationValueProvider`, `GotPltTarget`)
+        // (`RelocationArch`, `RelocationValueProvider`, `PltArch`)
         // lives on this single ZST in `arch/<host>/relocation.rs`. Because
         // `SUPPORTS_NATIVE_RUNTIME` on each per-ISA ZST is `cfg!(target_arch
         // = "<isa>")`, this re-export is the only place that turns "host

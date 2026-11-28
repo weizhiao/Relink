@@ -1,8 +1,8 @@
 use crate::input::{ModuleSourceId, Path};
 use crate::{
     Error, IoError, MmapError, Result, logging,
-    memory::{HostRegion, MappedRegion, VmAddr},
-    os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags, SpaceInit, SpaceLayout},
+    memory::VmAddr,
+    os::{MadviseAdvice, MapFlags, ProtFlags},
 };
 use alloc::ffi::CString;
 use core::{
@@ -11,33 +11,20 @@ use core::{
 };
 use syscalls::Sysno;
 
-/// Default raw-syscall mapping backend for Linux `use-syscall` builds.
-#[derive(Clone, Copy, Default)]
-pub struct DefaultMmap;
-
-impl DefaultMmap {
-    /// Creates the default raw-syscall mapping backend.
-    #[inline]
-    pub const fn new() -> Self {
-        Self
-    }
-
-    #[inline]
-    pub(super) unsafe fn map(
-        &self,
-        addr: VmAddr,
-        len: usize,
-        prot: ProtFlags,
-        flags: MapFlags,
-        fd: isize,
-        offset: usize,
-    ) -> core::result::Result<VmAddr, u32> {
-        from_ret(
-            unsafe { raw_mmap(addr, len, prot, flags, fd, offset) },
-            |code| code,
-        )
-        .map(VmAddr::new)
-    }
+#[inline]
+pub(super) unsafe fn map(
+    addr: VmAddr,
+    len: usize,
+    prot: ProtFlags,
+    flags: MapFlags,
+    fd: isize,
+    offset: usize,
+) -> core::result::Result<VmAddr, u32> {
+    from_ret(
+        unsafe { raw_mmap(addr, len, prot, flags, fd, offset) },
+        |code| code,
+    )
+    .map(VmAddr::new)
 }
 
 pub(crate) fn path_is_dir(path: &Path) -> bool {
@@ -141,88 +128,40 @@ struct Statx {
     spare: [u64; 12],
 }
 
-impl Mmap for DefaultMmap {
-    type Region = HostRegion;
+/// Releases an owned mapping or a page-aligned subrange of it.
+pub(super) unsafe fn unmap(addr: VmAddr, len: usize) -> Result<()> {
+    from_ret(
+        unsafe { syscalls::raw_syscall!(Sysno::munmap, addr.as_mut_ptr::<c_void>(), len) },
+        |code| Error::from(MmapError::MunmapFailed { code }),
+    )
+    .map(|_| ())
+}
 
-    fn thp_page_size(&self) -> Option<PageSize> {
-        super::thp_page_size()
-    }
+#[inline]
+pub(super) unsafe fn advise(addr: VmAddr, len: usize, behavior: MadviseAdvice) -> Result<()> {
+    from_ret(
+        syscalls::raw_syscall!(
+            Sysno::madvise,
+            addr.as_mut_ptr::<c_void>(),
+            len,
+            behavior as c_int
+        ),
+        |code| Error::from(MmapError::Madvise { code }),
+    )?;
+    Ok(())
+}
 
-    unsafe fn create_space(
-        &self,
-        layout: SpaceLayout,
-        prot: ProtFlags,
-        init: SpaceInit,
-    ) -> Result<MappedRegion<Self::Region>> {
-        unsafe { super::create_space(self, layout, prot, init) }
-    }
-
-    unsafe fn alias_space(&self, addr: VmAddr, len: usize) -> Result<MappedRegion<Self::Region>> {
-        // SAFETY: the caller guarantees the existing mapping remains valid.
-        Ok(unsafe { MappedRegion::local_alias(addr.as_mut_ptr(), len, *self) })
-    }
-
-    unsafe fn map_file_at(
-        &self,
-        addr: VmAddr,
-        len: usize,
-        prot: ProtFlags,
-        flags: MapFlags,
-        offset: usize,
-        fd: isize,
-    ) -> Result<()> {
-        unsafe { self.map(addr, len, prot, flags, fd, offset) }
-            .map(|_| ())
-            .map_err(|code| MmapError::MmapFailed { code }.into())
-    }
-
-    unsafe fn map_zero_at(
-        &self,
-        addr: VmAddr,
-        len: usize,
-        prot: ProtFlags,
-        flags: MapFlags,
-    ) -> Result<()> {
-        unsafe { self.map(addr, len, prot, flags | MapFlags::MAP_ANONYMOUS, -1, 0) }
-            .map(|_| ())
-            .map_err(|code| MmapError::MmapAnonymousFailed { code }.into())
-    }
-
-    /// Releases an owned mapping or a page-aligned subrange of it.
-    unsafe fn munmap(&self, addr: VmAddr, len: usize) -> Result<()> {
-        from_ret(
-            unsafe { syscalls::raw_syscall!(Sysno::munmap, addr.as_mut_ptr::<c_void>(), len) },
-            |code| Error::from(MmapError::MunmapFailed { code }),
-        )
-        .map(|_| ())
-    }
-
-    #[inline]
-    unsafe fn madvise(&self, addr: VmAddr, len: usize, behavior: MadviseAdvice) -> Result<()> {
-        from_ret(
-            syscalls::raw_syscall!(
-                Sysno::madvise,
-                addr.as_mut_ptr::<c_void>(),
-                len,
-                behavior as c_int
-            ),
-            |code| Error::from(MmapError::Madvise { code }),
-        )?;
-        Ok(())
-    }
-
-    unsafe fn mprotect(&self, addr: VmAddr, len: usize, prot: ProtFlags) -> Result<()> {
-        from_ret(
-            syscalls::raw_syscall!(
-                Sysno::mprotect,
-                addr.as_mut_ptr::<c_void>(),
-                len,
-                prot.bits()
-            ),
-            |code| Error::from(MmapError::Mprotect { code }),
-        )?;
-        Ok(())
-    }
+pub(super) unsafe fn protect(addr: VmAddr, len: usize, prot: ProtFlags) -> Result<()> {
+    from_ret(
+        syscalls::raw_syscall!(
+            Sysno::mprotect,
+            addr.as_mut_ptr::<c_void>(),
+            len,
+            prot.bits()
+        ),
+        |code| Error::from(MmapError::Mprotect { code }),
+    )?;
+    Ok(())
 }
 
 /// Invokes the native mmap ABI with a byte offset on every architecture.
@@ -236,7 +175,7 @@ unsafe fn raw_mmap(
     offset: usize,
 ) -> usize {
     #[cfg(target_pointer_width = "32")]
-    let (syscall, offset) = (Sysno::mmap2, offset / PageSize::BASE_BYTES);
+    let (syscall, offset) = (Sysno::mmap2, offset / crate::os::PageSize::BASE_BYTES);
     #[cfg(not(target_pointer_width = "32"))]
     let syscall = Sysno::mmap;
     unsafe {

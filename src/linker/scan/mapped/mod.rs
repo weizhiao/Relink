@@ -21,7 +21,7 @@ mod arena;
 mod rewrite;
 
 use arena::MappedArenaMap;
-pub(crate) use rewrite::GotPltTarget;
+pub(crate) use rewrite::PltArch;
 use rewrite::RuntimeMetadataRewriter;
 
 pub(crate) struct RuntimeModuleMemory<R: RegionAccess = HostRegion> {
@@ -218,7 +218,7 @@ impl<R: RegionAccess> MappedRuntimeMemory<R> {
         plan: &mut LinkPlan<Arch, Tls>,
     ) -> Result<()>
     where
-        Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
+        Arch: RelocationArch + RelocationValueProvider + PltArch,
         Tls: TlsResolver<Arch>,
         ElfRelType<Arch>: ByteRepr,
     {

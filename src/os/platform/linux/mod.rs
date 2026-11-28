@@ -2,7 +2,7 @@ use crate::{
     MmapError, Result,
     input::Path,
     memory::{HostRegion, MappedRegion, VmAddr, VmOffset},
-    os::{MapFlags, Mmap, PageSize, ProtFlags, SpaceInit, SpaceLayout},
+    os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags, SpaceInit, SpaceLayout},
     sync::OnceCell,
 };
 
@@ -12,13 +12,89 @@ cfg_if::cfg_if! {
     if #[cfg(feature = "use-syscall")] {
         mod syscall;
 
-        pub use syscall::DefaultMmap;
-        pub(crate) use syscall::{RawFile, getauxval, path_is_dir};
+        use self::syscall as backend;
     } else {
         mod libc;
 
-        pub use libc::DefaultMmap;
-        pub(crate) use libc::{RawFile, getauxval, path_is_dir};
+        use self::libc as backend;
+    }
+}
+
+pub(crate) use backend::{RawFile, getauxval, path_is_dir};
+
+/// Default Linux mapping backend.
+#[derive(Clone, Copy, Default)]
+pub struct DefaultMmap;
+
+impl DefaultMmap {
+    /// Creates a mapper using the configured Linux backend.
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl Mmap for DefaultMmap {
+    type Region = HostRegion;
+
+    #[cfg(not(feature = "use-syscall"))]
+    fn page_size(&self) -> PageSize {
+        backend::page_size()
+    }
+
+    fn thp_page_size(&self) -> Option<PageSize> {
+        thp_page_size()
+    }
+
+    unsafe fn create_space(
+        &self,
+        layout: SpaceLayout,
+        prot: ProtFlags,
+        init: SpaceInit,
+    ) -> Result<MappedRegion<Self::Region>> {
+        unsafe { create_space(self, layout, prot, init) }
+    }
+
+    unsafe fn alias_space(&self, addr: VmAddr, len: usize) -> Result<MappedRegion<Self::Region>> {
+        // SAFETY: the caller guarantees the existing mapping remains valid.
+        Ok(unsafe { MappedRegion::local_alias(addr.as_mut_ptr(), len, *self) })
+    }
+
+    unsafe fn map_file_at(
+        &self,
+        addr: VmAddr,
+        len: usize,
+        prot: ProtFlags,
+        flags: MapFlags,
+        offset: usize,
+        fd: isize,
+    ) -> Result<()> {
+        unsafe { backend::map(addr, len, prot, flags, fd, offset) }
+            .map(|_| ())
+            .map_err(|code| MmapError::MmapFailed { code }.into())
+    }
+
+    unsafe fn map_zero_at(
+        &self,
+        addr: VmAddr,
+        len: usize,
+        prot: ProtFlags,
+        flags: MapFlags,
+    ) -> Result<()> {
+        unsafe { backend::map(addr, len, prot, flags | MapFlags::MAP_ANONYMOUS, -1, 0) }
+            .map(|_| ())
+            .map_err(|code| MmapError::MmapAnonymousFailed { code }.into())
+    }
+
+    unsafe fn munmap(&self, addr: VmAddr, len: usize) -> Result<()> {
+        unsafe { backend::unmap(addr, len) }
+    }
+
+    unsafe fn madvise(&self, addr: VmAddr, len: usize, behavior: MadviseAdvice) -> Result<()> {
+        unsafe { backend::advise(addr, len, behavior) }
+    }
+
+    unsafe fn mprotect(&self, addr: VmAddr, len: usize, prot: ProtFlags) -> Result<()> {
+        unsafe { backend::protect(addr, len, prot) }
     }
 }
 
@@ -56,7 +132,7 @@ unsafe fn create_space(
     let page_size = mapper.page_size().bytes();
     if layout.align == page_size {
         let start = unsafe {
-            mapper.map(
+            backend::map(
                 layout.addr.unwrap_or(VmAddr::null()),
                 layout.len,
                 prot,
@@ -86,7 +162,7 @@ unsafe fn create_space(
         .checked_add(layout.align - page_size)
         .ok_or(MmapError::InvalidMappedRegionRange)?;
     let owned_start = unsafe {
-        mapper.map(
+        backend::map(
             layout.addr.unwrap_or(VmAddr::null()),
             reserved_len,
             ProtFlags::PROT_NONE,
@@ -106,7 +182,7 @@ unsafe fn create_space(
             SpaceInit::File { .. } => {
                 // MAP_FIXED stays inside the range reserved above.
                 let _ = unsafe {
-                    mapper.map(
+                    backend::map(
                         start,
                         layout.len,
                         prot,

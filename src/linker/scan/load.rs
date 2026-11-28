@@ -1,6 +1,6 @@
 use super::{
-    GotPltTarget, LinkPlan, MappedRuntimeMemory, Materialization, MemoryLayoutPlan,
-    ModuleId as PlanModuleId, build_arena_raw_dynamic,
+    LinkPlan, MappedRuntimeMemory, Materialization, MemoryLayoutPlan, ModuleId as PlanModuleId,
+    PltArch, build_arena_raw_dynamic,
 };
 use crate::{
     ByteRepr, LinkerError, Loader, Result,
@@ -32,7 +32,7 @@ impl<'run, 'pipe, D, Tls, Arch, M, Resolver, RelocBinder, Obs>
 where
     D: Default + Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
-    Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
+    Arch: RelocationArch + RelocationValueProvider + PltArch,
     M: Mmap,
     ElfRelType<Arch>: ByteRepr,
     Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch> + RelocationObserver<Arch>,

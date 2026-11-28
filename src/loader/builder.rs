@@ -69,7 +69,7 @@ pub(crate) struct ImageBuilder<
     pub(crate) segments: ElfSegments<R>,
 
     /// Interpreter path (PT_INTERP)
-    pub(crate) interp: Option<&'static str>,
+    pub(crate) interp: Option<&'static [u8]>,
 
     /// Pointer to the .eh_frame_hdr section (PT_GNU_EH_FRAME)
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
@@ -173,22 +173,14 @@ where
         Ok(())
     }
 
-    fn read_interp(&self, phdr: &ElfPhdr<Arch::Layout>) -> Result<&'static str> {
+    fn read_interp(&self, phdr: &ElfPhdr<Arch::Layout>) -> Result<&'static [u8]> {
         let view = self
             .segments
             .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())
             .ok_or_else(|| {
                 ParsePhdrError::malformed("PT_INTERP is not directly readable from mapped segments")
             })?;
-        let bytes = view.as_slice();
-        let Some(nul) = bytes.iter().position(|byte| *byte == 0) else {
-            return Err(ParsePhdrError::malformed("PT_INTERP is missing a NUL terminator").into());
-        };
-        if nul == 0 {
-            return Err(ParsePhdrError::malformed("PT_INTERP is empty").into());
-        }
-        core::str::from_utf8(&bytes[..nul])
-            .map_err(|_| ParsePhdrError::InvalidUtf8 { field: "PT_INTERP" }.into())
+        crate::elf::parse_interp(view.as_slice())
     }
 
     /// Parse all program headers and collect the builder state they describe.

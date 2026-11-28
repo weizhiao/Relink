@@ -8,7 +8,7 @@ use crate::{
         object_relocation_sections, section_entries,
     },
     observer::RelocationObserver,
-    relocation::{ObjectArch, RelocHelper, RelocationArch},
+    relocation::{ObjectRelocation, RelocHelper, RelocationArch},
     tls::TlsResolver,
 };
 use elf::abi::*;
@@ -76,16 +76,13 @@ struct Hi20Relocation {
 }
 
 #[derive(Default)]
-#[doc(hidden)]
-pub struct ObjectState {
+pub(crate) struct ObjectState {
     hi20_cache: HashMap<VmAddr, Hi20Relocation>,
 }
 
-impl ObjectArch for RiscV64Arch {
+impl ObjectRelocation for RiscV64Arch {
     type State = ObjectState;
 
-    #[allow(private_bounds)]
-    #[allow(private_interfaces)]
     fn prepare_relocation<D, R, Tls, Obs, Memory>(
         state: &mut Self::State,
         helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, Memory>,
@@ -131,8 +128,6 @@ impl ObjectArch for RiscV64Arch {
         Ok(())
     }
 
-    #[allow(private_bounds)]
-    #[allow(private_interfaces)]
     fn relocate<D, R, Tls, Obs, Memory>(
         state: &mut Self::State,
         helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, Memory>,

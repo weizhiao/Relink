@@ -21,7 +21,9 @@ pub enum Materialization {
     /// Materialize the full DSO into a private region with multiple
     /// permission-specific mapped areas derived from `PT_LOAD`.
     WholeDsoRegion,
-    /// Materialize alloc sections directly into section regions / arenas.
+    /// Materialize allocated sections in arenas. On x86-64 this repairs
+    /// traditional and IBT PLT entries. Use [`Self::WholeDsoRegion`] for
+    /// other PLT instruction layouts.
     SectionRegions,
 }
 

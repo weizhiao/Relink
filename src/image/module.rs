@@ -630,12 +630,11 @@ impl<Arch: RelocationArch> LocalScope<Arch> {
 
 impl<Arch: RelocationArch> WeakLocalScope<Arch> {
     #[inline]
-    pub(crate) fn upgrade_local(&self) -> Option<LocalScope<Arch>> {
-        let scope = ModuleScope {
+    pub(crate) fn upgrade_local(&self) -> Option<ModuleScope<Arch>> {
+        Some(ModuleScope {
             modules: self.local.upgrade()?,
             domain: self.domain,
-        };
-        Some(LocalScope::from_group(scope))
+        })
     }
 
     #[inline]

@@ -10,7 +10,7 @@ use elf::abi::*;
 use crate::arch::ArchKind;
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::lazy::LazyPlacement;
-use crate::linker::scan::GotPltTarget;
+use crate::linker::scan::{PltArch, SectionMetadata};
 use crate::relocation::{
     RelocationArch, RelocationValueFormula, RelocationValueKind, RelocationValueProvider,
 };
@@ -94,37 +94,30 @@ impl RelocationValueProvider for X86_64Arch {
     }
 }
 
-impl GotPltTarget for X86_64Arch {
+impl PltArch for X86_64Arch {
+    fn visit_plt_displacements(
+        section: &SectionMetadata,
+        bytes: &[u8],
+        visit: impl FnMut(usize, i32) -> Result<()>,
+    ) -> Result<()> {
+        super::plt::visit_displacements(section.name(), section.entry_size, bytes, visit)
+    }
+
     fn got_plt_target(
-        target_bytes: &[u8],
         relocation_type: ElfRelocationType,
-        symbol_is_undef: bool,
-        section_offset: usize,
         source_place: usize,
         addend: isize,
+        read_site: impl FnOnce(&mut [u8]) -> Result<()>,
     ) -> Result<Option<usize>> {
-        match relocation_type.raw() {
-            // These relocation types target an already-created GOT/PLT slot. For
-            // undefined symbols, st_value is zero until the dynamic relocation pass
-            // fills that slot, so recover the slot address from the original
-            // encoded displacement.
-            R_X86_64_GOTPCREL => {}
-            R_X86_64_PLT32 if symbol_is_undef => {}
-            _ => return Ok(None),
+        // PLT32 may name a defined, preemptible symbol. Preserve the target
+        // chosen by the static linker, including calls routed through its PLT.
+        if !matches!(relocation_type.raw(), R_X86_64_PLT32 | R_X86_64_GOTPCREL) {
+            return Ok(None);
         }
 
-        let end = section_offset
-            .checked_add(size_of::<i32>())
-            .ok_or_else(|| {
-                LinkerError::metadata_rewrite("retained relocation read range overflowed")
-            })?;
-        let bytes = target_bytes.get(section_offset..end).ok_or_else(|| {
-            LinkerError::metadata_rewrite("retained relocation read range exceeds section")
-        })?;
-
         let mut encoded = [0u8; size_of::<i32>()];
-        encoded.copy_from_slice(bytes);
-        let displacement = i128::from(i32::from_ne_bytes(encoded));
+        read_site(&mut encoded)?;
+        let displacement = i128::from(i32::from_le_bytes(encoded));
         let target = source_place as i128 + displacement - addend as i128;
         usize::try_from(target).map(Some).map_err(|_| {
             LinkerError::metadata_rewrite("retained relocation encoded target is out of range")

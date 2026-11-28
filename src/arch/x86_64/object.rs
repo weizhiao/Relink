@@ -6,7 +6,7 @@ use crate::{
     object::layout::{GotEntry, ObjectRelocKey, PltEntry, PltGotSection},
     observer::RelocationObserver,
     relocation::{
-        ObjectArch, RelocHelper, RelocValue, RelocationArch, RelocationValueInput,
+        ObjectRelocation, RelocHelper, RelocValue, RelocationArch, RelocationValueInput,
         RelocationValueProvider,
     },
     tls::TlsResolver,
@@ -28,11 +28,9 @@ enum ObjectWrite {
     SWord32(RelocValue<i32>),
 }
 
-impl ObjectArch for X86_64Arch {
+impl ObjectRelocation for X86_64Arch {
     type State = ();
 
-    #[allow(private_bounds)]
-    #[allow(private_interfaces)]
     fn relocate<D, R, Tls, Obs, Memory>(
         _state: &mut Self::State,
         helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, Memory>,

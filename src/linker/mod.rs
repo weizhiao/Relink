@@ -24,5 +24,5 @@ pub use resolver::{
     ResolvedKey, SearchConfig, SearchPathResolver,
 };
 pub use run::{FailedLoad, LinkerRun, PreparedLoad, PublishedLoad, RelocatedLoad};
-pub use storage::{ContextId, ModuleId, ModuleKey, ModuleLease};
+pub use storage::{ContextId, LeaseError, ModuleId, ModuleKey, ModuleLease};
 pub use unload::{UnloadGroup, UnloadedModule};

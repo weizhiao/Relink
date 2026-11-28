@@ -626,11 +626,6 @@ pub enum ParsePhdrError {
     },
     /// A dynamic image was expected to carry `PT_DYNAMIC`.
     MissingDynamicSection,
-    /// `{field} contains invalid UTF-8`
-    InvalidUtf8 {
-        /// Program-header field or payload that failed UTF-8 validation.
-        field: &'static str,
-    },
 }
 
 impl ParsePhdrError {
@@ -653,7 +648,6 @@ impl Display for ParsePhdrError {
                 "program headers are not compatible with page size {page_size}"
             ),
             Self::MissingDynamicSection => f.write_str("program headers do not contain PT_DYNAMIC"),
-            Self::InvalidUtf8 { field } => write!(f, "{field} contains invalid UTF-8"),
         }
     }
 }

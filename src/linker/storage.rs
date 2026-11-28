@@ -197,6 +197,34 @@ pub struct ModuleLease {
     id: ModuleId,
 }
 
+/// A context rejected a lease-consuming operation. Retry with the original acquisition.
+#[derive(Debug)]
+pub struct LeaseError<T = ModuleLease> {
+    /// Reason the context rejected the acquisition.
+    pub error: crate::Error,
+    /// Lease or load result returned to the caller.
+    pub acquisition: T,
+}
+
+impl<T> Display for LeaseError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.error.fmt(f)
+    }
+}
+
+impl<T: fmt::Debug> core::error::Error for LeaseError<T> {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+
+/// Propagating only the underlying error discards the returned acquisition.
+impl<T> From<LeaseError<T>> for crate::Error {
+    fn from(rejected: LeaseError<T>) -> Self {
+        rejected.error
+    }
+}
+
 impl ModuleLease {
     #[inline]
     pub(in crate::linker) const fn new(id: ModuleId) -> Self {

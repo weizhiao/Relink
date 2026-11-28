@@ -149,7 +149,7 @@ pub struct RawDynamic<
     /// Entry point of the ELF object.
     entry: VmAddr,
     /// PT_INTERP segment value (interpreter path).
-    interp: Option<&'static str>,
+    interp: Option<&'static [u8]>,
     /// Core component containing the basic ELF object information
     module: ElfCore<D, Arch, R, Tls>,
     /// Extra data needed for relocation
@@ -205,12 +205,9 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         self.extra.got_plt
     }
 
-    /// Gets the PT_INTERP value
-    ///
-    /// # Returns
-    /// An optional string slice containing the interpreter path
+    /// Returns the bytes of the interpreter path, excluding the NUL terminator.
     #[inline]
-    pub fn interp(&self) -> Option<&str> {
+    pub fn interp(&self) -> Option<&[u8]> {
         self.interp
     }
 

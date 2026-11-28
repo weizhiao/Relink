@@ -1,8 +1,8 @@
 use crate::{
     IoError, MmapError, Result,
     input::{ModuleSourceId, Path},
-    memory::{HostRegion, MappedRegion, VmAddr},
-    os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags, SpaceInit, SpaceLayout},
+    memory::VmAddr,
+    os::{MadviseAdvice, MapFlags, PageSize, ProtFlags},
 };
 use libc::{_SC_PAGESIZE, madvise, mmap, mprotect, munmap, sysconf};
 use std::{
@@ -33,42 +33,29 @@ pub(crate) fn getauxval(at: usize) -> usize {
     unsafe { libc::getauxval(at as libc::c_ulong) as usize }
 }
 
-/// Default mapping backend for Linux/Android `std` builds.
-#[derive(Clone, Copy, Default)]
-pub struct DefaultMmap;
-
-impl DefaultMmap {
-    /// Creates the default libc-backed mmap implementation.
-    #[inline]
-    pub const fn new() -> Self {
-        Self
+#[inline]
+pub(super) unsafe fn map(
+    addr: VmAddr,
+    len: usize,
+    prot: ProtFlags,
+    flags: MapFlags,
+    fd: isize,
+    offset: usize,
+) -> core::result::Result<VmAddr, u32> {
+    let ptr = unsafe {
+        mmap(
+            addr.as_mut_ptr(),
+            len,
+            prot.bits(),
+            flags.bits(),
+            fd as i32,
+            offset as _,
+        )
+    };
+    if core::ptr::eq(ptr, libc::MAP_FAILED) {
+        return Err(last_os_error_code());
     }
-
-    #[inline]
-    pub(super) unsafe fn map(
-        &self,
-        addr: VmAddr,
-        len: usize,
-        prot: ProtFlags,
-        flags: MapFlags,
-        fd: isize,
-        offset: usize,
-    ) -> core::result::Result<VmAddr, u32> {
-        let ptr = unsafe {
-            mmap(
-                addr.as_mut_ptr(),
-                len,
-                prot.bits(),
-                flags.bits(),
-                fd as i32,
-                offset as _,
-            )
-        };
-        if core::ptr::eq(ptr, libc::MAP_FAILED) {
-            return Err(last_os_error_code());
-        }
-        Ok(VmAddr::from_ptr(ptr))
-    }
+    Ok(VmAddr::from_ptr(ptr))
 }
 
 pub(crate) fn path_is_dir(path: &Path) -> bool {
@@ -79,95 +66,47 @@ pub(crate) struct RawFile {
     file: File,
 }
 
-impl Mmap for DefaultMmap {
-    type Region = HostRegion;
+#[inline]
+pub(super) fn page_size() -> PageSize {
+    let page_size = unsafe { sysconf(_SC_PAGESIZE) };
+    if page_size <= 0 {
+        PageSize::Base
+    } else {
+        PageSize::new(page_size as usize).unwrap_or_default()
+    }
+}
 
-    #[inline]
-    fn page_size(&self) -> PageSize {
-        let page_size = unsafe { sysconf(_SC_PAGESIZE) };
-        if page_size <= 0 {
-            PageSize::Base
-        } else {
-            PageSize::new(page_size as usize).unwrap_or_default()
+/// Releases an owned mapping or a page-aligned subrange of it.
+pub(super) unsafe fn unmap(addr: VmAddr, len: usize) -> Result<()> {
+    if unsafe { munmap(addr.as_mut_ptr(), len) } != 0 {
+        return Err(MmapError::MunmapFailed {
+            code: last_os_error_code(),
         }
+        .into());
     }
+    Ok(())
+}
 
-    fn thp_page_size(&self) -> Option<PageSize> {
-        super::thp_page_size()
-    }
-
-    unsafe fn create_space(
-        &self,
-        layout: SpaceLayout,
-        prot: ProtFlags,
-        init: SpaceInit,
-    ) -> Result<MappedRegion<Self::Region>> {
-        unsafe { super::create_space(self, layout, prot, init) }
-    }
-
-    unsafe fn alias_space(&self, addr: VmAddr, len: usize) -> Result<MappedRegion<Self::Region>> {
-        // SAFETY: the caller guarantees the existing mapping remains valid.
-        Ok(unsafe { MappedRegion::local_alias(addr.as_mut_ptr(), len, *self) })
-    }
-
-    unsafe fn map_file_at(
-        &self,
-        addr: VmAddr,
-        len: usize,
-        prot: ProtFlags,
-        flags: MapFlags,
-        offset: usize,
-        fd: isize,
-    ) -> Result<()> {
-        unsafe { self.map(addr, len, prot, flags, fd, offset) }
-            .map(|_| ())
-            .map_err(|code| MmapError::MmapFailed { code }.into())
-    }
-
-    unsafe fn map_zero_at(
-        &self,
-        addr: VmAddr,
-        len: usize,
-        prot: ProtFlags,
-        flags: MapFlags,
-    ) -> Result<()> {
-        unsafe { self.map(addr, len, prot, flags | MapFlags::MAP_ANONYMOUS, -1, 0) }
-            .map(|_| ())
-            .map_err(|code| MmapError::MmapAnonymousFailed { code }.into())
-    }
-
-    /// Releases an owned mapping or a page-aligned subrange of it.
-    unsafe fn munmap(&self, addr: VmAddr, len: usize) -> Result<()> {
-        if unsafe { munmap(addr.as_mut_ptr(), len) } != 0 {
-            return Err(MmapError::MunmapFailed {
-                code: last_os_error_code(),
-            }
-            .into());
+pub(super) unsafe fn advise(addr: VmAddr, len: usize, behavior: MadviseAdvice) -> Result<()> {
+    let res = unsafe { madvise(addr.as_mut_ptr(), len, behavior as _) };
+    if res != 0 {
+        return Err(MmapError::Madvise {
+            code: last_os_error_code(),
         }
-        Ok(())
+        .into());
     }
+    Ok(())
+}
 
-    unsafe fn madvise(&self, addr: VmAddr, len: usize, behavior: MadviseAdvice) -> Result<()> {
-        let res = unsafe { madvise(addr.as_mut_ptr(), len, behavior as _) };
-        if res != 0 {
-            return Err(MmapError::Madvise {
-                code: last_os_error_code(),
-            }
-            .into());
+pub(super) unsafe fn protect(addr: VmAddr, len: usize, prot: ProtFlags) -> Result<()> {
+    let res = unsafe { mprotect(addr.as_mut_ptr(), len, prot.bits()) };
+    if res != 0 {
+        return Err(MmapError::Mprotect {
+            code: last_os_error_code(),
         }
-        Ok(())
+        .into());
     }
-
-    unsafe fn mprotect(&self, addr: VmAddr, len: usize, prot: ProtFlags) -> Result<()> {
-        let res = unsafe { mprotect(addr.as_mut_ptr(), len, prot.bits()) };
-        if res != 0 {
-            return Err(MmapError::Mprotect {
-                code: last_os_error_code(),
-            }
-            .into());
-        }
-        Ok(())
-    }
+    Ok(())
 }
 
 impl RawFile {

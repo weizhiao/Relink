@@ -117,6 +117,7 @@ struct StaticExecInner<
 
     /// Loader source path or caller-provided source identifier.
     path: PathBuf,
+    interp: Option<&'static [u8]>,
 
     /// Entry point of the executable
     entry: VmAddr,
@@ -241,11 +242,12 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         }
     }
 
-    /// Returns the PT_INTERP value.
-    pub fn interp(&self) -> Option<&str> {
+    /// Returns the bytes of the interpreter path, excluding the NUL terminator.
+    #[inline]
+    pub fn interp(&self) -> Option<&[u8]> {
         match self {
             RawExec::Dynamic(image) => image.interp(),
-            RawExec::Static(_) => None,
+            RawExec::Static(image) => image.inner.interp,
         }
     }
 
@@ -437,6 +439,7 @@ where
             domain: self.domain,
             entry,
             path: self.path,
+            interp: self.interp,
             user_data: self.user_data,
             segments: self.segments,
             phdrs: if phdrs.is_empty() {

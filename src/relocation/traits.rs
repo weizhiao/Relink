@@ -141,14 +141,18 @@ pub trait RelocationArch: 'static {
     }
 }
 
-/// Object-file (`ET_REL`) relocation support layered on top of [`RelocationArch`].
+/// Built-in architecture accepted by the object-file loader.
 #[cfg(feature = "object")]
-#[doc(hidden)]
-pub trait ObjectArch: RelocationArch {
+#[allow(private_bounds)]
+pub trait ObjectArch: ObjectRelocation {}
+
+#[cfg(feature = "object")]
+impl<T: ObjectRelocation> ObjectArch for T {}
+
+#[cfg(feature = "object")]
+pub(crate) trait ObjectRelocation: RelocationArch {
     type State: Default;
 
-    #[allow(private_bounds)]
-    #[allow(private_interfaces)]
     fn prepare_relocation<D, R, Tls, Obs, Memory>(
         _state: &mut Self::State,
         _helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, Memory>,
@@ -165,8 +169,6 @@ pub trait ObjectArch: RelocationArch {
         Ok(())
     }
 
-    #[allow(private_bounds)]
-    #[allow(private_interfaces)]
     fn relocate<D, R, Tls, Obs, Memory>(
         _state: &mut Self::State,
         helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, Memory>,
@@ -208,8 +210,8 @@ pub trait ObjectArch: RelocationArch {
     }
 }
 
+/// Architecture accepted by the generic image loader when object loading is disabled.
 #[cfg(not(feature = "object"))]
-#[doc(hidden)]
 pub trait ObjectArch: RelocationArch {}
 
 #[cfg(not(feature = "object"))]

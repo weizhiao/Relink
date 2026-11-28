@@ -25,7 +25,7 @@ pub mod write;
 
 // Internal module re-exports for use within the crate
 pub(crate) use dynamic::{ElfDynamic, ElfDynamicHashTab, LifecycleSpec, parse_dynamic_entries};
-pub(crate) use phdr::ElfPhdrs;
+pub(crate) use phdr::{ElfPhdrs, parse_interp};
 pub(crate) use symbol::ElfStringTable;
 
 // Public API exports
@@ -34,7 +34,7 @@ pub use dynamic::{ElfDyn, ElfDynamicTag};
 pub use ehdr::{ElfClass, ElfFileType, ElfHeader, ElfMachine, ElfTarget};
 #[cfg(all(feature = "std", target_os = "linux", target_env = "gnu"))]
 pub(crate) use hash::ElfGnuHeader;
-pub use hash::HashTable;
+pub(crate) use hash::HashTable;
 pub use layout::{Elf32Layout, Elf64Layout, ElfDataEncoding, ElfLayout, NativeElfLayout};
 pub use lifecycle::Lifecycle;
 pub use note::{ElfNhdr, ElfNote, ElfNotes};

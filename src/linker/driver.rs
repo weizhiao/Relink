@@ -2,11 +2,11 @@ use super::{
     context::LinkContext,
     run::LinkerRun,
     scan::LinkPipeline,
-    storage::{ModuleId, ModuleLease},
+    storage::{LeaseError, ModuleId, ModuleLease},
     unload::UnloadGroup,
 };
 use crate::{
-    Loader, Relocator, Result,
+    Loader, Relocator,
     arch::NativeArch,
     const_builder::NoDrop,
     os::Mmap,
@@ -61,17 +61,20 @@ impl LoadResult {
         (self.lease, self.modules)
     }
 
-    /// Releases the root acquisition represented by this load.
+    /// Releases the root acquisition, returning the full load result if the context rejects it.
     #[inline]
     pub fn release<Meta, Arch, Tls>(
         self,
         context: &mut LinkContext<Meta, Arch, Tls>,
-    ) -> Result<UnloadGroup<Meta, Arch>>
+    ) -> core::result::Result<UnloadGroup<Meta, Arch>, LeaseError<Self>>
     where
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,
     {
-        context.release(self.lease)
+        context.release(self.lease).map_err(|rejected| LeaseError {
+            error: rejected.error,
+            acquisition: Self::new(rejected.acquisition, self.modules),
+        })
     }
 }
 

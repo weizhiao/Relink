@@ -8,11 +8,10 @@ mod arena;
 mod plan;
 mod section;
 
-pub use arena::{
-    ArenaDescriptor, ArenaId, ArenaSharing, ArenaUsage, ClassPolicy, MemoryClass, PackingPolicy,
-};
+pub use arena::{ArenaDescriptor, ArenaId, ArenaSharing, ArenaUsage, MemoryClass};
 pub use plan::Materialization;
-pub use section::{ModuleLayout, SectionAddress, SectionMetadata, SectionPlacement};
+pub(in crate::linker) use section::ModuleLayout;
+pub use section::{SectionAddress, SectionMetadata, SectionPlacement};
 
 pub(in crate::linker) use plan::MemoryLayoutPlan;
 pub(in crate::linker) use section::SectionId;

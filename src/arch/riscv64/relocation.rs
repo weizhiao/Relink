@@ -6,7 +6,7 @@ use crate::Result;
 use crate::arch::{ArchKind, riscv};
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::lazy::LazyPlacement;
-use crate::linker::scan::GotPltTarget;
+use crate::linker::scan::PltArch;
 use crate::relocation::{RelocationArch, RelocationValueProvider};
 
 const EF_RISCV_RV64ILP32: u32 = 0x0020;
@@ -100,4 +100,4 @@ impl RelocationArch for RiscV64Arch {
 }
 
 impl RelocationValueProvider for RiscV64Arch {}
-impl GotPltTarget for RiscV64Arch {}
+impl PltArch for RiscV64Arch {}

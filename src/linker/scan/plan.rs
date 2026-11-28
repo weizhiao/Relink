@@ -1,5 +1,6 @@
 use super::{
-    Materialization, ModuleLayout, SectionId, SectionMetadata, SectionPlacement,
+    Materialization, SectionId, SectionMetadata, SectionPlacement,
+    layout::ModuleLayout,
     layout::{DataAccess, MemoryLayoutPlan, SectionDataAccessRef},
 };
 use crate::{

@@ -142,6 +142,7 @@ pub struct SectionMetadata {
     info_section: Option<SectionId>,
     source_address: usize,
     source_file_offset: usize,
+    pub(crate) entry_size: usize,
     size: usize,
     alignment: usize,
 }
@@ -157,6 +158,7 @@ impl SectionMetadata {
             info_section: None,
             source_address: section.address(),
             source_file_offset: section.file_offset(),
+            entry_size: section.header().sh_entsize(),
             size: section.size(),
             alignment: section.alignment().max(1),
         }
@@ -562,7 +564,7 @@ impl SectionArena {
 
 /// One module's logical section view inside the layout plan.
 #[derive(Debug, Clone, Default)]
-pub struct ModuleLayout {
+pub(in crate::linker) struct ModuleLayout {
     scanned_sections: SecondaryMap<ElfSectionId, SectionId>,
     alloc_sections: Box<[SectionId]>,
     relocation_sections: Box<[SectionId]>,
@@ -572,12 +574,6 @@ pub struct ModuleLayout {
 }
 
 impl ModuleLayout {
-    /// Creates an empty module layout.
-    #[inline]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Creates one module layout from explicit scanned-section mappings.
     pub(crate) fn from_sections<I>(sections: I, arena: &SectionArena) -> Self
     where

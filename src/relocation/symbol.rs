@@ -170,9 +170,14 @@ impl<'lib, Arch: RelocationArch> SymDef<'lib, Arch> {
 
 /// Resolves symbols through a fixed, ordered set of borrowed module exports.
 pub(crate) struct SymbolResolver<'lib, Arch: RelocationArch> {
-    source: &'lib ModuleHandle<Arch>,
+    search: SymbolSearch<'lib, Arch>,
     scope: &'lib LocalScope<Arch>,
     modules: Vec<LookupModule<'lib, Arch>>,
+}
+
+/// Binding rules shared by batch relocation and a single deferred PLT lookup.
+pub(crate) struct SymbolSearch<'lib, Arch: RelocationArch> {
+    source: &'lib ModuleHandle<Arch>,
     registry: Option<&'lib SymbolRegistry<Arch>>,
     symbolic: bool,
 }
@@ -181,6 +186,14 @@ struct LookupModule<'scope, Arch: RelocationArch> {
     source: &'scope ModuleHandle<Arch>,
     exports: &'scope ExportTable<Arch::Layout>,
     is_source: bool,
+}
+
+impl<Arch: RelocationArch> Copy for LookupModule<'_, Arch> {}
+
+impl<Arch: RelocationArch> Clone for LookupModule<'_, Arch> {
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
 impl<'lib, Arch> SymbolResolver<'lib, Arch>
@@ -196,31 +209,13 @@ where
         symbolic: bool,
         order: LookupOrder,
     ) -> Self {
-        let (before, after) = match order {
-            LookupOrder::GlobalFirst => (global, None),
-            LookupOrder::LocalFirst => (None, global),
-        };
+        let search = SymbolSearch::new(source, registry, symbolic);
         let mut modules = Vec::with_capacity(scope.len() + global.map_or(0, |scope| scope.len()));
-        modules.extend(
-            before
-                .into_iter()
-                .chain(scope.groups())
-                .chain(after)
-                .flat_map(|group| group.iter())
-                .map(|module| LookupModule {
-                    source: module,
-                    exports: module.exports(),
-                    // Match both allocation and vtable: wrappers sharing state
-                    // may still override symbol resolution.
-                    is_source: core::ptr::eq(module.as_ref(), source.as_ref()),
-                }),
-        );
+        modules.extend(search.ordered_modules(scope.groups(), global, order));
         Self {
-            source,
+            search,
             scope,
             modules,
-            registry,
-            symbolic,
         }
     }
 
@@ -229,19 +224,103 @@ where
         self.scope
     }
 
-    fn lookup_in_scope<'find>(
+    #[inline]
+    pub(crate) fn find<'find>(
         &'find self,
         entry: &SymbolEntry<'find, Arch::Layout>,
-        mut accept: impl FnMut(&ModuleHandle<Arch>) -> bool,
-    ) -> Option<(
-        &'find ElfSymbol<Arch::Layout>,
-        &'find LookupModule<'lib, Arch>,
-    )> {
+    ) -> Option<SymDef<'find, Arch>> {
+        self.search.find_in(entry, self.modules.iter().copied())
+    }
+
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn find_copy<'find>(
+        &'find self,
+        entry: &SymbolEntry<'find, Arch::Layout>,
+    ) -> Option<(SymDef<'find, Arch>, BindingEffect)> {
+        let source_id = self.search.source.source_id();
+        let providers = self
+            .modules
+            .iter()
+            .filter(|module| module.source.source_id() != source_id);
+        let (symbol, module) = self.search.lookup_in_scope(entry, providers.copied())?;
+        let pin = if symbol.bind() != ElfSymbolBind::GNU_UNIQUE {
+            None
+        } else if let Some(registry) = &self.search.registry {
+            registry
+                .resolve_unique(entry.name(), entry.symbol(), self.search.source)
+                .effect(self.search.source.as_ref())
+                .pin()
+        } else {
+            Some(self.search.source.state().instance_id())
+        };
+        let definition = SymDef::defined(symbol, module.source.as_ref());
+        let mut effect = definition.effect(self.search.source.as_ref());
+        effect.pin = pin;
+        Some((definition, effect))
+    }
+}
+
+impl<'lib, Arch: RelocationArch> SymbolSearch<'lib, Arch> {
+    pub(crate) fn new(
+        source: &'lib ModuleHandle<Arch>,
+        registry: Option<&'lib SymbolRegistry<Arch>>,
+        symbolic: bool,
+    ) -> Self {
+        Self {
+            source,
+            registry,
+            symbolic,
+        }
+    }
+
+    fn ordered_modules<'a>(
+        &self,
+        local: &'a [ModuleScope<Arch>],
+        global: Option<&'a ModuleScope<Arch>>,
+        order: LookupOrder,
+    ) -> impl Iterator<Item = LookupModule<'a, Arch>> {
+        let (before, after) = match order {
+            LookupOrder::GlobalFirst => (global, None),
+            LookupOrder::LocalFirst => (None, global),
+        };
+        let source = self.source;
+        before
+            .into_iter()
+            .chain(local)
+            .chain(after)
+            .flat_map(|group| group.iter())
+            .map(move |module| LookupModule {
+                source: module,
+                exports: module.exports(),
+                // Wrappers can share state while overriding symbol resolution.
+                is_source: core::ptr::eq(module.as_ref(), source.as_ref()),
+            })
+    }
+
+    pub(crate) fn find_lazy<'find>(
+        &self,
+        entry: &SymbolEntry<'find, Arch::Layout>,
+        local: &'lib ModuleScope<Arch>,
+        global: Option<&'lib ModuleScope<Arch>>,
+        order: LookupOrder,
+    ) -> Option<SymDef<'find, Arch>>
+    where
+        'lib: 'find,
+    {
+        self.find_in(
+            entry,
+            self.ordered_modules(core::slice::from_ref(local), global, order),
+        )
+    }
+
+    fn lookup_in_scope<'find>(
+        &self,
+        entry: &SymbolEntry<'find, Arch::Layout>,
+        modules: impl Iterator<Item = LookupModule<'lib, Arch>>,
+    ) -> Option<(&'lib ElfSymbol<Arch::Layout>, LookupModule<'lib, Arch>)> {
         let mut lookup = SymbolLookup::from_info(entry.info().clone());
-        for module in &self.modules {
-            if !accept(module.source) {
-                continue;
-            }
+        for module in modules {
             // Definition hints apply only to the exact requesting module.
             lookup.set_symbol_hint(
                 module
@@ -300,43 +379,22 @@ where
     }
 
     #[inline(always)]
-    pub(crate) fn find<'find>(
-        &'find self,
+    fn find_in<'find>(
+        &self,
         entry: &SymbolEntry<'find, Arch::Layout>,
-    ) -> Option<SymDef<'find, Arch>> {
+        modules: impl Iterator<Item = LookupModule<'lib, Arch>>,
+    ) -> Option<SymDef<'find, Arch>>
+    where
+        'lib: 'find,
+    {
         let sym = entry.symbol();
         let binds_locally = unlikely(sym.binds_local()) || (self.symbolic && !sym.is_undef());
-        if !binds_locally && let Some((symbol, module)) = self.lookup_in_scope(entry, |_| true) {
+        if !binds_locally && let Some((symbol, module)) = self.lookup_in_scope(entry, modules) {
             return Some(self.bind(entry.name(), symbol, module.source, module.is_source));
         }
         (!sym.is_undef())
             .then(|| self.bind(entry.name(), sym, self.source, true))
             .or_else(|| Self::weak_undef(sym))
-    }
-
-    #[cold]
-    #[inline(never)]
-    pub(crate) fn find_copy<'find>(
-        &'find self,
-        entry: &SymbolEntry<'find, Arch::Layout>,
-    ) -> Option<(SymDef<'find, Arch>, BindingEffect)> {
-        let source_id = self.source.source_id();
-        let (symbol, module) =
-            self.lookup_in_scope(entry, |source| source.source_id() != source_id)?;
-        let pin = if symbol.bind() != ElfSymbolBind::GNU_UNIQUE {
-            None
-        } else if let Some(registry) = &self.registry {
-            registry
-                .resolve_unique(entry.name(), entry.symbol(), self.source)
-                .effect(self.source.as_ref())
-                .pin()
-        } else {
-            Some(self.source.state().instance_id())
-        };
-        let definition = SymDef::defined(symbol, module.source.as_ref());
-        let mut effect = definition.effect(self.source.as_ref());
-        effect.pin = pin;
-        Some((definition, effect))
     }
 
     #[cold]

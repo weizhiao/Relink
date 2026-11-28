@@ -4,7 +4,7 @@ use crate::{
     image::{ModuleCapability, ScannedDynamic},
     linker::{
         ModuleKey,
-        scan::{Materialization, ModuleId, ModuleLayout},
+        scan::{Materialization, ModuleId},
     },
     relocation::RelocationArch,
     tls::TlsResolver,
@@ -130,19 +130,6 @@ impl<'scope, S> Module<'scope, S>
 where
     S: SectionDataAccess,
 {
-    /// Returns this module's planned layout through `plan`.
-    #[inline]
-    pub fn layout<'borrow, Arch, Tls>(
-        self,
-        plan: &'borrow LinkPassPlan<'scope, S, Arch, Tls>,
-    ) -> &'borrow ModuleLayout
-    where
-        Arch: RelocationArch,
-        Tls: TlsResolver<Arch>,
-    {
-        plan.plan.module_layout(self.id)
-    }
-
     /// Returns one checked section handle for a scanned section in this module.
     #[inline]
     pub fn section<Arch, Tls>(

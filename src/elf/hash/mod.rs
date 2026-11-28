@@ -62,9 +62,7 @@ pub fn sysv_hash(name: &[u8]) -> u32 {
 /// Dynamic ELF files may carry either a GNU hash table or the traditional SYSV
 /// hash table. Both represent the same role in this loader, so the distinction
 /// is kept inside this implementation detail.
-pub struct HashTable<L: ElfLayout = NativeElfLayout>(HashTableKind<L>);
-
-enum HashTableKind<L: ElfLayout = NativeElfLayout> {
+pub(crate) enum HashTable<L: ElfLayout = NativeElfLayout> {
     /// GNU hash table (.gnu.hash section).
     Gnu(ElfGnuHash<L>),
 
@@ -73,13 +71,6 @@ enum HashTableKind<L: ElfLayout = NativeElfLayout> {
 }
 
 impl<L: ElfLayout> Clone for HashTable<L> {
-    #[inline]
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
-    }
-}
-
-impl<L: ElfLayout> Clone for HashTableKind<L> {
     #[inline]
     fn clone(&self) -> Self {
         match self {
@@ -91,9 +82,9 @@ impl<L: ElfLayout> Clone for HashTableKind<L> {
 
 impl<L: ElfLayout> Debug for HashTable<L> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match &self.0 {
-            HashTableKind::Gnu(_) => write!(f, "GnuHash"),
-            HashTableKind::Sysv(_) => write!(f, "ElfHash"),
+        match self {
+            HashTable::Gnu(_) => write!(f, "GnuHash"),
+            HashTable::Sysv(_) => write!(f, "ElfHash"),
         }
     }
 }
@@ -119,17 +110,7 @@ impl PreCompute {
 }
 
 impl<L: ElfLayout> HashTable<L> {
-    /// Create a hash table from dynamic section information.
-    ///
-    /// This method creates a hash table based on the information in the
-    /// ELF dynamic section. The type of hash table created depends on
-    /// what hash sections are referenced in the dynamic section.
-    ///
-    /// # Arguments
-    /// * `dynamic` - The ELF dynamic section information.
-    ///
-    /// # Returns
-    /// A HashTable instance containing either a GNU or SYSV hash implementation.
+    /// Reads the symbol index selected by the dynamic section.
     pub(crate) fn from_dynamic<Arch, R>(
         dynamic: &ElfDynamic<Arch>,
         segments: &ElfSegments<R>,
@@ -138,10 +119,10 @@ impl<L: ElfLayout> HashTable<L> {
         Arch: RelocationArch<Layout = L>,
         R: RegionAccess,
     {
-        Ok(Self(match dynamic.hashtab {
-            ElfDynamicHashTab::Gnu(addr) => HashTableKind::Gnu(ElfGnuHash::parse(segments, addr)?),
-            ElfDynamicHashTab::Elf(addr) => HashTableKind::Sysv(ElfHash::parse(segments, addr)?),
-        }))
+        Ok(match dynamic.hashtab {
+            ElfDynamicHashTab::Gnu(addr) => HashTable::Gnu(ElfGnuHash::parse(segments, addr)?),
+            ElfDynamicHashTab::Elf(addr) => HashTable::Sysv(ElfHash::parse(segments, addr)?),
+        })
     }
 
     pub(crate) fn for_each(
@@ -149,9 +130,9 @@ impl<L: ElfLayout> HashTable<L> {
         table: SymbolTableView<'_, L>,
         visitor: &mut dyn FnMut(&ElfSymbol<L>),
     ) {
-        match &self.0 {
-            HashTableKind::Gnu(hashtab) => hashtab.for_each(table, visitor),
-            HashTableKind::Sysv(hashtab) => hashtab.for_each(table, visitor),
+        match self {
+            HashTable::Gnu(hashtab) => hashtab.for_each(table, visitor),
+            HashTable::Sysv(hashtab) => hashtab.for_each(table, visitor),
         }
     }
 
@@ -160,9 +141,9 @@ impl<L: ElfLayout> HashTable<L> {
         table: SymbolTableView<'sym, L>,
         lookup: &mut SymbolLookup<'_>,
     ) -> Option<&'sym ElfSymbol<L>> {
-        match &self.0 {
-            HashTableKind::Gnu(hashtab) => hashtab.lookup(table, lookup),
-            HashTableKind::Sysv(hashtab) => hashtab.lookup(table, lookup),
+        match self {
+            HashTable::Gnu(hashtab) => hashtab.lookup(table, lookup),
+            HashTable::Sysv(hashtab) => hashtab.lookup(table, lookup),
         }
     }
 }

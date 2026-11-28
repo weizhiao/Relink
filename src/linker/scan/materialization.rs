@@ -1,12 +1,13 @@
 use super::{
     layout::{
-        ArenaDescriptor, ArenaId, ArenaSharing, ClassPolicy, Materialization, MemoryClass,
-        MemoryLayoutPlan, PackingPolicy, SectionId, SectionPlacement,
+        ArenaDescriptor, ArenaId, ArenaSharing, Materialization, MemoryClass, MemoryLayoutPlan,
+        SectionId, SectionPlacement,
     },
     plan::{LinkPlan, ModuleId},
 };
 use crate::{
-    LinkerError, Result, image::ModuleCapability, relocation::RelocationArch, tls::TlsResolver,
+    LinkerError, Result, image::ModuleCapability, os::PageSize, relocation::RelocationArch,
+    tls::TlsResolver,
 };
 use alloc::{collections::BTreeMap, vec::Vec};
 
@@ -29,11 +30,10 @@ where
             return Ok(());
         }
 
-        let policy = PackingPolicy::shared_huge_pages();
         let mut arena_state = ArenaState::new();
 
         arena_state.record_placed(self, &modules);
-        arena_state.assign_unplaced(self, &modules, policy);
+        arena_state.assign_unplaced(self, &modules);
 
         Ok(())
     }
@@ -117,12 +117,8 @@ impl ArenaState {
         }
     }
 
-    fn assign_unplaced<Arch, Tls>(
-        &mut self,
-        plan: &mut LinkPlan<Arch, Tls>,
-        modules: &[ModuleId],
-        policy: PackingPolicy,
-    ) where
+    fn assign_unplaced<Arch, Tls>(&mut self, plan: &mut LinkPlan<Arch, Tls>, modules: &[ModuleId])
+    where
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,
     {
@@ -131,7 +127,7 @@ impl ArenaState {
             for index in 0..section_count {
                 let section_id = plan.module_layout(module_id).alloc_sections()[index];
                 if plan.placement(section_id).is_none() {
-                    self.assign_fallback_section(plan, module_id, section_id, policy);
+                    self.assign_fallback_section(plan, module_id, section_id);
                 }
             }
         }
@@ -172,7 +168,6 @@ impl ArenaState {
         plan: &mut LinkPlan<Arch, Tls>,
         module_id: ModuleId,
         section_id: SectionId,
-        policy: PackingPolicy,
     ) where
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,
@@ -186,12 +181,7 @@ impl ArenaState {
                 section.alignment(),
             )
         };
-        let arena_id = self.ensure_arena(
-            plan.memory_layout_mut(),
-            module_id,
-            policy.class_policy(memory_class),
-            memory_class,
-        );
+        let arena_id = self.ensure_arena(plan.memory_layout_mut(), module_id, memory_class);
         let offset = plan.memory_layout().next_offset(arena_id, alignment);
 
         assert!(
@@ -205,11 +195,10 @@ impl ArenaState {
         &mut self,
         layout: &mut MemoryLayoutPlan,
         module_id: ModuleId,
-        class_policy: ClassPolicy,
         memory_class: MemoryClass,
     ) -> ArenaId {
-        match class_policy.sharing() {
-            ArenaSharing::Shared => {
+        match memory_class {
+            MemoryClass::Code | MemoryClass::ReadOnlyData => {
                 if let Some(arena_id) = self.shared_arenas.get(&memory_class).copied() {
                     return arena_id;
                 }
@@ -220,19 +209,19 @@ impl ArenaState {
                 }
 
                 let arena_id = layout.create_arena(ArenaDescriptor::new(
-                    class_policy.page_size(),
+                    PageSize::Huge2MiB,
                     memory_class,
                     ArenaSharing::Shared,
                 ));
                 self.shared_arenas.insert(memory_class, arena_id);
                 arena_id
             }
-            ArenaSharing::Private => *self
+            MemoryClass::WritableData | MemoryClass::ThreadLocalData => *self
                 .private_arenas
                 .entry((module_id, memory_class))
                 .or_insert_with(|| {
                     layout.create_arena(ArenaDescriptor::new(
-                        class_policy.page_size(),
+                        PageSize::Base,
                         memory_class,
                         ArenaSharing::Private,
                     ))
