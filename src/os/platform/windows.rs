@@ -203,11 +203,8 @@ impl Mmap for DefaultMmap {
         unsafe { GetSystemInfo(info.as_mut_ptr()) };
         let info = unsafe { info.assume_init() };
         let page_size = info.dwPageSize as usize;
-        let padding = layout.align - page_size;
-        let allocation_len = layout
-            .len
-            .checked_add(padding)
-            .ok_or(MmapError::InvalidMappedRegionRange)?;
+        let allocation_len = layout.reservation_len(page_size)?;
+        let has_padding = allocation_len > layout.len;
         // Windows requires reservation hints at allocation granularity, while
         // the image can begin at any page-aligned position inside that range.
         let hint = layout
@@ -235,11 +232,11 @@ impl Mmap for DefaultMmap {
                 Memory::VirtualAlloc(
                     hint.map_or(null(), |addr| addr.as_mut_ptr::<c_void>()),
                     allocation_len,
-                    MEM_RESERVE | if padding == 0 { MEM_COMMIT } else { 0 },
-                    if padding == 0 {
-                        protection
-                    } else {
+                    MEM_RESERVE | if has_padding { 0 } else { MEM_COMMIT },
+                    if has_padding {
                         PAGE_NOACCESS
+                    } else {
+                        protection
                     },
                 )
             },
@@ -251,7 +248,7 @@ impl Mmap for DefaultMmap {
         let offset = layout.padding_at(VmAddr::from_ptr(ptr));
         let visible = unsafe { ptr.cast::<u8>().add(offset).cast::<c_void>() };
         if matches!(init, SpaceInit::Zeroed)
-            && padding != 0
+            && has_padding
             && unsafe { Memory::VirtualAlloc(visible, layout.len, MEM_COMMIT, protection) }
                 .is_null()
         {

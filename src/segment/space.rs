@@ -80,18 +80,18 @@ impl<R: RegionAccess> ElfSegments<R> {
         self.range.start..self.range.end
     }
 
+    /// Borrows typed entries at an ELF virtual offset relative to the load base.
     #[inline]
     pub(crate) fn read_view<T: ByteRepr + 'static>(
         &self,
         offset: VmOffset,
         byte_len: usize,
-    ) -> Option<MappedView<T>> {
-        let addr = self.base() + offset;
+    ) -> Result<MappedView<T>> {
+        let addr = self.base + offset;
         if !self.contains_range(addr, byte_len) {
-            return None;
+            return Err(MmapError::InvalidMappedRegionRange.into());
         }
-        let region_offset = self.region_offset(addr);
-        self.region.read_view(region_offset, byte_len)
+        self.region.read_view(self.region_offset(addr), byte_len)
     }
 
     /// Reads typed entries from `offset` to the end of its mapped range.
@@ -103,19 +103,23 @@ impl<R: RegionAccess> ElfSegments<R> {
     pub(crate) fn read_tail_view<T: ByteRepr + 'static>(
         &self,
         offset: VmOffset,
-    ) -> Option<MappedView<T>> {
+    ) -> Result<MappedView<T>> {
         let entry_size = core::mem::size_of::<T>();
         if entry_size == 0 {
-            return None;
+            return Err(MmapError::InvalidViewLayout.into());
         }
 
         let addr = self.base + offset;
-        let remaining = self.range.end.checked_offset_from(addr)?.get();
-        let byte_len = remaining - remaining % entry_size;
-        if byte_len == 0 {
-            return None;
+        let remaining = self
+            .range
+            .end
+            .checked_offset_from(addr)
+            .ok_or(MmapError::InvalidMappedRegionRange)?
+            .get();
+        if remaining < entry_size {
+            return Err(MmapError::InvalidMappedRegionRange.into());
         }
-        self.read_view(offset, byte_len)
+        self.read_view(offset, remaining - remaining % entry_size)
     }
 
     #[inline]
@@ -127,7 +131,7 @@ impl<R: RegionAccess> ElfSegments<R> {
     #[inline]
     pub(crate) fn mprotect(&self, addr: VmAddr, len: usize, prot: ProtFlags) -> Result<()> {
         debug_assert!(self.contains_range(addr, len));
-        unsafe { self.region.mprotect(self.region_offset(addr), len, prot) }
+        unsafe { self.region.mprotect(addr, len, prot) }
     }
 
     /// Returns the base address of the mapped memory as a raw integer.
@@ -168,10 +172,9 @@ impl<R: RegionAccess> ImageMemory for ElfSegments<R> {
 
     #[inline]
     unsafe fn read_bytes(&self, addr: VmAddr, dst: &mut [u8]) -> Result<()> {
-        if !self.contains_range(addr, dst.len()) {
-            return Err(MmapError::InvalidMappedRegionRange.into());
-        }
-        unsafe { self.region.read_bytes(self.region_offset(addr), dst) }
+        let offset = addr.wrapping_offset_from(self.base);
+        dst.copy_from_slice(&self.read_view::<u8>(offset, dst.len())?);
+        Ok(())
     }
 
     #[inline]

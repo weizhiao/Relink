@@ -1,6 +1,12 @@
+use alloc::boxed::Box;
 use core::{ops::Deref, ptr::NonNull};
 
-use crate::{ByteRepr, Result, os::ProtFlags, sync::Arc, try_cast_bytes};
+use crate::{
+    ByteRepr, MmapError, Result,
+    os::{Mmap, ProtFlags},
+    sync::Arc,
+    try_cast_bytes,
+};
 
 use super::{HostRegion, traits::RegionAccess};
 
@@ -182,9 +188,38 @@ impl core::fmt::Display for VmAddr {
     }
 }
 
-/// A mapped region returned by [`Mmap`](crate::os::Mmap), backed by any
-/// [`RegionAccess`] implementation.
-pub struct MappedRegion<R: RegionAccess = HostRegion>(Arc<R>);
+/// A shared handle to a mapped region. The last handle releases any owned storage.
+pub struct MappedRegion<R: RegionAccess = HostRegion>(Arc<RegionInner<R>>);
+
+struct RegionInner<R: RegionAccess> {
+    region: R,
+    control: Option<MappingControl<R>>,
+}
+
+/// Retains a mapper for page protection. Converting a mapper with `into()`
+/// leaves storage cleanup to the region or its owner.
+pub struct MappingControl<R: RegionAccess = HostRegion> {
+    mapper: Box<dyn Mmap<Region = R>>,
+    /// Original base and length, including any retained alignment padding.
+    pub(super) owned_range: Option<(VmAddr, usize)>,
+}
+
+impl<R: RegionAccess, M: Mmap<Region = R>> From<M> for MappingControl<R> {
+    fn from(mapper: M) -> Self {
+        Self {
+            mapper: Box::new(mapper),
+            owned_range: None,
+        }
+    }
+}
+
+impl<R: RegionAccess> Drop for MappingControl<R> {
+    fn drop(&mut self) {
+        if let Some((addr, len)) = self.owned_range {
+            let _ = unsafe { self.mapper.munmap(addr, len) };
+        }
+    }
+}
 
 /// A typed borrowed view of a mapped region.
 pub(crate) struct MappedView<T: 'static> {
@@ -206,40 +241,29 @@ impl<T: 'static> Clone for MappedView<T> {
 }
 
 impl<R: RegionAccess> MappedRegion<R> {
-    /// Wraps a region access backend in a shared mapped-region handle.
+    /// Shares `region` across handles. Pass `Some(mapper.into())` to let the mapper
+    /// change page permissions, or `None` when the owner manages them.
     #[inline]
-    pub fn new(region: R) -> Self {
-        Self(Arc::new(region))
+    pub fn new(region: R, control: Option<MappingControl<R>>) -> Self {
+        Self(Arc::new(RegionInner { region, control }))
     }
 
     /// Returns the base VM address of the mapped region.
     #[inline]
     pub fn addr(&self) -> VmAddr {
-        self.0.addr()
+        self.0.region.addr()
     }
 
     /// Returns the mapped region length in bytes.
     #[inline]
     pub fn len(&self) -> usize {
-        self.0.len()
+        self.0.region.len()
     }
 
     /// Returns true when this region contains no bytes.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    /// Reads bytes from the region without checking bounds.
-    ///
-    /// The returned error represents backend access failure; it is not a
-    /// substitute for range validation.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset..offset + dst.len()` is inside this region.
-    #[inline]
-    pub(crate) unsafe fn read_bytes(&self, offset: usize, dst: &mut [u8]) -> Result<()> {
-        unsafe { self.0.read_bytes(offset, dst) }
+        self.0.region.is_empty()
     }
 
     /// Writes bytes into the region without checking bounds.
@@ -251,7 +275,7 @@ impl<R: RegionAccess> MappedRegion<R> {
     /// The caller must ensure `offset..offset + src.len()` is inside this region.
     #[inline]
     pub(crate) unsafe fn write_bytes(&self, offset: usize, src: &[u8]) -> Result<()> {
-        unsafe { self.0.write_bytes(offset, src) }
+        unsafe { self.0.region.write_bytes(offset, src) }
     }
 
     /// Fills bytes in the region without checking bounds.
@@ -263,32 +287,27 @@ impl<R: RegionAccess> MappedRegion<R> {
     /// The caller must ensure `offset..offset + len` is inside this region.
     #[inline]
     pub(crate) unsafe fn zero_bytes(&self, offset: usize, len: usize) -> Result<()> {
-        unsafe { self.0.zero_bytes(offset, len) }
+        unsafe { self.0.region.zero_bytes(offset, len) }
     }
 
     #[inline]
     pub(crate) unsafe fn borrow_bytes(&self, offset: usize, len: usize) -> Option<&'static [u8]> {
-        unsafe { self.0.borrow_bytes(offset, len) }
+        unsafe { self.0.region.borrow_bytes(offset, len) }
     }
 
     pub(crate) fn read_view<T: ByteRepr + 'static>(
         &self,
         offset: usize,
         byte_len: usize,
-    ) -> Option<MappedView<T>> {
-        if core::mem::size_of::<T>() == 0 {
-            return None;
-        }
-
-        if byte_len == 0 {
-            return Some(MappedView { slice: &[] });
-        }
-
-        let bytes = (unsafe { self.borrow_bytes(offset, byte_len) })?;
-
-        Some(MappedView {
-            slice: try_cast_bytes(bytes)?,
-        })
+    ) -> Result<MappedView<T>> {
+        let bytes = if byte_len == 0 {
+            &[]
+        } else {
+            unsafe { self.borrow_bytes(offset, byte_len) }
+                .ok_or(MmapError::HostPointerUnavailable)?
+        };
+        let slice = try_cast_bytes(bytes).ok_or(MmapError::InvalidViewLayout)?;
+        Ok(MappedView::from_slice(slice))
     }
 
     /// Returns a host-accessible pointer without checking bounds.
@@ -297,12 +316,15 @@ impl<R: RegionAccess> MappedRegion<R> {
     /// The caller must ensure `offset` is inside this region.
     #[inline]
     pub(crate) unsafe fn host_ptr(&self, offset: usize) -> Option<NonNull<u8>> {
-        unsafe { self.0.host_ptr(offset) }
+        unsafe { self.0.region.host_ptr(offset) }
     }
 
     #[inline]
-    pub(crate) unsafe fn mprotect(&self, offset: usize, len: usize, prot: ProtFlags) -> Result<()> {
-        unsafe { self.0.mprotect(offset, len, prot) }
+    pub(crate) unsafe fn mprotect(&self, addr: VmAddr, len: usize, prot: ProtFlags) -> Result<()> {
+        match &self.0.control {
+            Some(control) => unsafe { control.mapper.mprotect(addr, len, prot) },
+            None => Ok(()),
+        }
     }
 }
 

@@ -1,16 +1,13 @@
 use core::{mem::size_of, ops::Range, ptr::NonNull};
 
-use crate::{
-    ByteRepr, Result,
-    os::{MadviseAdvice, ProtFlags},
-};
+use crate::{ByteRepr, Result};
 
 use super::VmAddr;
 
 /// Memory access backend for a mapped VM range.
 ///
-/// Implementations can be host-backed mmap regions, guest VM memory adapters,
-/// or any other backend that can service byte reads/writes for the range.
+/// The loader reads mapped bytes through [`Self::borrow_bytes`] and applies
+/// relocation writes through [`Self::write_bytes`].
 /// Reading requires initialized, readable bytes without concurrent writes.
 /// Writing requires writable bytes and exclusive access. Buffers passed to
 /// byte-copy operations must be disjoint from the accessed range.
@@ -27,40 +24,6 @@ pub trait RegionAccess: Send + Sync + 'static {
         self.len() == 0
     }
 
-    /// Reads bytes without checking bounds.
-    ///
-    /// The returned error represents backend access failure; it is not a
-    /// substitute for range validation.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset..offset + dst.len()` is inside this region.
-    unsafe fn read_bytes(&self, offset: usize, dst: &mut [u8]) -> Result<()>;
-
-    /// Reads one typed value without checking bounds.
-    ///
-    /// The returned error represents backend access failure; it is not a
-    /// substitute for range validation.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset..offset + size_of::<T>()` is inside this region
-    /// and `offset` is aligned for `T`.
-    #[inline]
-    unsafe fn read_value<T: ByteRepr>(&self, offset: usize) -> Result<T> {
-        unsafe { self.read_unaligned_value(offset) }
-    }
-
-    /// Reads one typed value without requiring alignment.
-    ///
-    /// The returned error represents backend access failure; it is not a
-    /// substitute for range validation.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset..offset + size_of::<T>()` is inside this region.
-    #[inline]
-    unsafe fn read_unaligned_value<T: ByteRepr>(&self, offset: usize) -> Result<T> {
-        crate::aligned_bytes::read_value(|bytes| unsafe { self.read_bytes(offset, bytes) })
-    }
-
     /// Writes bytes without checking bounds.
     ///
     /// The returned error represents backend access failure; it is not a
@@ -69,34 +32,6 @@ pub trait RegionAccess: Send + Sync + 'static {
     /// # Safety
     /// The caller must ensure `offset..offset + src.len()` is inside this region.
     unsafe fn write_bytes(&self, offset: usize, src: &[u8]) -> Result<()>;
-
-    /// Writes one typed value without checking bounds.
-    ///
-    /// The returned error represents backend access failure; it is not a
-    /// substitute for range validation.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset..offset + size_of::<T>()` is inside this region
-    /// and `offset` is aligned for `T`.
-    #[inline]
-    unsafe fn write_value<T: ByteRepr>(&self, offset: usize, value: T) -> Result<()> {
-        unsafe { self.write_unaligned_value(offset, value) }
-    }
-
-    /// Writes one typed value without requiring alignment.
-    ///
-    /// The returned error represents backend access failure; it is not a
-    /// substitute for range validation.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset..offset + size_of::<T>()` is inside this region.
-    #[inline]
-    unsafe fn write_unaligned_value<T: ByteRepr>(&self, offset: usize, value: T) -> Result<()> {
-        let bytes = unsafe {
-            core::slice::from_raw_parts((&value as *const T).cast::<u8>(), size_of::<T>())
-        };
-        unsafe { self.write_bytes(offset, bytes) }
-    }
 
     /// Fills bytes with zeroes without checking bounds.
     ///
@@ -108,6 +43,8 @@ pub trait RegionAccess: Send + Sync + 'static {
     unsafe fn zero_bytes(&self, offset: usize, len: usize) -> Result<()>;
 
     /// Borrows directly readable host bytes without checking bounds.
+    /// On success the slice covers exactly `offset..offset + len`. Mapped ELF
+    /// metadata and byte reads through `ElfSegments` require this view.
     ///
     /// # Safety
     /// The caller must ensure `offset..offset + len` is inside this region, keep
@@ -120,18 +57,6 @@ pub trait RegionAccess: Send + Sync + 'static {
     /// # Safety
     /// The caller must ensure `offset` is inside this region.
     unsafe fn host_ptr(&self, offset: usize) -> Option<NonNull<u8>>;
-
-    /// Applies memory advice to a range without checking bounds.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset..offset + len` is inside this region.
-    unsafe fn madvise(&self, offset: usize, len: usize, behavior: MadviseAdvice) -> Result<()>;
-
-    /// Changes protection for a range without checking bounds.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset..offset + len` is inside this region.
-    unsafe fn mprotect(&self, offset: usize, len: usize, prot: ProtFlags) -> Result<()>;
 }
 
 /// Address-space view for an image mapped at VM addresses.

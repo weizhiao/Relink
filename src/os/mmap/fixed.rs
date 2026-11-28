@@ -82,11 +82,6 @@ impl RegionAccess for FixedRegion {
         self.len
     }
 
-    unsafe fn read_bytes(&self, offset: usize, dst: &mut [u8]) -> Result<()> {
-        unsafe { copy_nonoverlapping(self.host_ptr(offset), dst.as_mut_ptr(), dst.len()) };
-        Ok(())
-    }
-
     unsafe fn write_bytes(&self, offset: usize, src: &[u8]) -> Result<()> {
         unsafe { copy_nonoverlapping(src.as_ptr(), self.host_ptr(offset), src.len()) };
         Ok(())
@@ -103,14 +98,6 @@ impl RegionAccess for FixedRegion {
 
     unsafe fn host_ptr(&self, offset: usize) -> Option<NonNull<u8>> {
         NonNull::new(unsafe { self.host_ptr(offset) })
-    }
-
-    unsafe fn madvise(&self, _offset: usize, _len: usize, _behavior: MadviseAdvice) -> Result<()> {
-        Ok(())
-    }
-
-    unsafe fn mprotect(&self, _offset: usize, _len: usize, _prot: ProtFlags) -> Result<()> {
-        Ok(())
     }
 }
 
@@ -132,11 +119,11 @@ impl Mmap for FixedMmap {
         }
         let region = self.region(addr, layout.len)?;
         unsafe { write_bytes(region.host.as_mut_ptr::<u8>(), 0, layout.len) };
-        Ok(MappedRegion::new(region))
+        Ok(MappedRegion::new(region, None))
     }
 
     unsafe fn alias_space(&self, addr: VmAddr, len: usize) -> Result<MappedRegion<Self::Region>> {
-        self.region(addr, len).map(MappedRegion::new)
+        Ok(MappedRegion::new(self.region(addr, len)?, None))
     }
 
     unsafe fn map_zero_at(

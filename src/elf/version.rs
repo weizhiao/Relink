@@ -104,12 +104,7 @@ impl VersionIndexTable {
         let offset = addr
             .checked_offset_from(segments.base())
             .ok_or(ParseDynamicError::AddressOverflow)?;
-        let entries = segments.read_tail_view(offset).ok_or_else(|| {
-            ParseDynamicError::malformed_table(
-                ElfDynamicTag::VERSYM,
-                "table is outside mapped ELF segments or has invalid alignment",
-            )
-        })?;
+        let entries = segments.read_tail_view(offset)?;
         Ok(Self(entries))
     }
 

@@ -260,8 +260,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
         segments: &ElfSegments,
         phdr: &ElfPhdr<Arch::Layout>,
     ) -> Result<MappedView<ElfDyn<Arch::Layout>>> {
-        let malformed = "PT_DYNAMIC is not directly readable from mapped segments";
-        if let Some(view) =
+        if let Ok(view) =
             segments.read_view::<ElfDyn<Arch::Layout>>(phdr.p_vaddr(), phdr.p_filesz())
             && !view.is_empty()
         {
@@ -272,11 +271,9 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
         let byte_len = phdr.p_filesz();
         let region =
             unsafe { MappedRegion::local_alias_no_unmap(addr.as_mut_ptr::<c_void>(), byte_len) };
-        let view = region
-            .read_view::<ElfDyn<Arch::Layout>>(0, byte_len)
-            .ok_or(ParsePhdrError::malformed(malformed))?;
+        let view = region.read_view::<ElfDyn<Arch::Layout>>(0, byte_len)?;
         if view.is_empty() {
-            return Err(ParsePhdrError::malformed(malformed).into());
+            return Err(ParsePhdrError::malformed("PT_DYNAMIC is empty").into());
         }
         Ok(view)
     }
@@ -338,11 +335,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
                 let image = if phdr.p_filesz() == 0 {
                     MappedView::empty()
                 } else {
-                    segments
-                        .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())
-                        .ok_or(ParsePhdrError::malformed(
-                            "PT_TLS is not directly readable from mapped segments",
-                        ))?
+                    segments.read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())?
                 };
                 ImageTlsState::owned(registration, image)
             }

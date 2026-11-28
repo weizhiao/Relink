@@ -138,30 +138,13 @@ impl<L: ElfLayout> ElfGnuHash<L> {
             .checked_add(bucket_size)
             .ok_or(ParseDynamicError::AddressOverflow)?;
 
-        let blooms = segments.read_view(blooms_off, bloom_size).ok_or_else(|| {
-            ParseDynamicError::malformed_table(
-                crate::elf::ElfDynamicTag::GNU_HASH,
-                "bloom filter size is malformed",
-            )
-        })?;
-        let buckets = segments
-            .read_view(buckets_off, bucket_size)
-            .ok_or_else(|| {
-                ParseDynamicError::malformed_table(
-                    crate::elf::ElfDynamicTag::GNU_HASH,
-                    "bucket table size is malformed",
-                )
-            })?;
+        let blooms = segments.read_view(blooms_off, bloom_size)?;
+        let buckets = segments.read_view(buckets_off, bucket_size)?;
         let chain_count = Self::count_chain_entries(segments, chains_off, &header, &buckets)?;
         let chain_size = chain_count
             .checked_mul(size_of::<u32>())
             .ok_or(ParseDynamicError::AddressOverflow)?;
-        let chains = segments.read_view(chains_off, chain_size).ok_or_else(|| {
-            ParseDynamicError::malformed_table(
-                crate::elf::ElfDynamicTag::GNU_HASH,
-                "chain table size is malformed",
-            )
-        })?;
+        let chains = segments.read_view(chains_off, chain_size)?;
 
         Ok(Self {
             header,

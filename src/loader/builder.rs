@@ -131,12 +131,7 @@ where
                     addr: self.segments.base() + phdr.p_vaddr(),
                     entries: self
                         .segments
-                        .read_view::<ElfDyn<Arch::Layout>>(phdr.p_vaddr(), phdr.p_filesz())
-                        .ok_or_else(|| {
-                            ParsePhdrError::malformed(
-                                "PT_DYNAMIC is not directly readable from mapped segments",
-                            )
-                        })?,
+                        .read_view::<ElfDyn<Arch::Layout>>(phdr.p_vaddr(), phdr.p_filesz())?,
                 });
             }
             ElfProgramType::GNU_RELRO => {
@@ -164,8 +159,7 @@ where
             }
             ElfProgramType::TLS => {
                 self.segments
-                    .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())
-                    .ok_or_else(|| ParsePhdrError::malformed("PT_TLS image is malformed"))?;
+                    .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())?;
                 self.tls_info = Some(TlsInfo::new(phdr));
             }
             _ => {}
@@ -176,10 +170,7 @@ where
     fn read_interp(&self, phdr: &ElfPhdr<Arch::Layout>) -> Result<&'static [u8]> {
         let view = self
             .segments
-            .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())
-            .ok_or_else(|| {
-                ParsePhdrError::malformed("PT_INTERP is not directly readable from mapped segments")
-            })?;
+            .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())?;
         crate::elf::parse_interp(view.as_slice())
     }
 
@@ -210,7 +201,7 @@ where
             if phdr.program_type() != ElfProgramType::PHDR {
                 continue;
             }
-            if let Some(mapped) = self
+            if let Ok(mapped) = self
                 .segments
                 .read_view::<ElfPhdr<Arch::Layout>>(phdr.p_vaddr(), phdr.p_memsz())
             {
@@ -237,7 +228,7 @@ where
                 let Some(phdr_vaddr) = phdr.p_vaddr().checked_add(phdr_start - seg_start) else {
                     continue;
                 };
-                if let Some(mapped) = self
+                if let Ok(mapped) = self
                     .segments
                     .read_view::<ElfPhdr<Arch::Layout>>(phdr_vaddr, phdr_size)
                 {

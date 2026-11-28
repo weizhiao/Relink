@@ -4,7 +4,7 @@
 //! and [`LoadedExec`] for the final executable form produced by relocation.
 
 use crate::{
-    ParsePhdrError, Result,
+    Result,
     arch::NativeArch,
     elf::ElfPhdr,
     image::{LoadedCore, Module, RawDynamic, SearchPathPool},
@@ -422,8 +422,7 @@ where
         let tls = if let Some(info) = &self.tls_info {
             let image = self
                 .segments
-                .read_view::<u8>(VmOffset::new(info.vaddr), info.filesz)
-                .ok_or_else(|| ParsePhdrError::malformed("PT_TLS image is malformed"))?;
+                .read_view::<u8>(VmOffset::new(info.vaddr), info.filesz)?;
             // Static executables always use static TLS if PT_TLS is present.
             let module = self
                 .domain

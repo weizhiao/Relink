@@ -157,10 +157,7 @@ unsafe fn create_space(
         });
     }
 
-    let reserved_len = layout
-        .len
-        .checked_add(layout.align - page_size)
-        .ok_or(MmapError::InvalidMappedRegionRange)?;
+    let reserved_len = layout.reservation_len(page_size)?;
     let owned_start = unsafe {
         backend::map(
             layout.addr.unwrap_or(VmAddr::null()),

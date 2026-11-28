@@ -156,6 +156,8 @@ pub enum MmapError {
     },
     /// A mapped-region byte range is outside the region bounds.
     InvalidMappedRegionRange,
+    /// The mapped bytes cannot form a slice of the requested element type.
+    InvalidViewLayout,
     /// The mapped region cannot expose a host-accessible pointer.
     HostPointerUnavailable,
     #[cfg(windows)]
@@ -209,6 +211,9 @@ impl Display for MmapError {
             Self::Mprotect { code } => write!(f, "mprotect failed with error: {code}"),
             Self::Madvise { code } => write!(f, "madvise failed with error: {code}"),
             Self::InvalidMappedRegionRange => f.write_str("mapped region range is out of bounds"),
+            Self::InvalidViewLayout => {
+                f.write_str("mapped bytes have an invalid size or alignment for the requested type")
+            }
             Self::HostPointerUnavailable => f.write_str("mapped region is not host-accessible"),
             #[cfg(windows)]
             Self::CreateFileMappingW { code } => {

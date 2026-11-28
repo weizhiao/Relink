@@ -19,6 +19,14 @@ pub struct SpaceLayout {
 }
 
 impl SpaceLayout {
+    /// Covers the visible image plus the maximum padding from a page-aligned base.
+    #[inline]
+    pub(crate) fn reservation_len(self, page_size: usize) -> Result<usize> {
+        self.len
+            .checked_add(self.align - page_size)
+            .ok_or(MmapError::InvalidMappedRegionRange.into())
+    }
+
     #[inline]
     pub(crate) fn is_aligned(self, addr: VmAddr) -> bool {
         self.padding_at(addr) == 0
@@ -189,7 +197,8 @@ pub trait Mmap: Send + Sync + 'static {
     unsafe fn madvise(&self, addr: VmAddr, len: usize, behavior: MadviseAdvice) -> Result<()>;
 
     /// Changes access permissions for `len` bytes, rounded up to a page boundary.
-    /// Used, for example, to make RELRO memory read-only after relocation.
+    /// A [`MappedRegion`] retains its backend to apply RELRO after relocation,
+    /// even after the loader is dropped. `addr` is in the target address space.
     ///
     /// # Safety
     /// `addr` must be page-aligned and identify a valid mapping. Ensure all users

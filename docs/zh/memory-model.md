@@ -1,12 +1,12 @@
 # Relink 内存模型
 
 [`memory` 模块](../../src/memory/mod.rs) 提供已映射内存的访问接口。
-[`Mmap` trait](../../src/os/traits.rs) 负责创建和填充映射，
-`RegionAccess` 负责读写、借用以及权限和内存建议操作。
+[`Mmap` trait](../../src/os/traits.rs) 负责创建映射、填充映射和设置页面权限。
+`RegionAccess` 提供映射内的字节访问。
 
 ```text
-Mmap                  创建和填充映射
-  → MappedRegion      共享 RegionAccess 后端的所有权
+Mmap                  创建映射、填充映射和设置页面权限
+  → MappedRegion      共享区域及其映射后端
     → ElfSegments     转换镜像地址，检查映射范围
       → ImageMemory   向加载器提供基于地址的访问接口
 ```
@@ -32,13 +32,16 @@ assert_eq!(addr.get(), 0x401000);
 
 ## 区域与所有权
 
-`RegionAccess` 描述一块连续内存区域，提供字节和类型化读写、清零、可选的宿主访问，
-以及权限和内存建议操作。调用未检查边界的方法前，调用方必须验证范围。
+`RegionAccess` 描述一块连续内存区域，提供字节借用、写入、清零和宿主指针转换。
+重定位通过 `ImageMemoryExt` 读写类型化的值，透明大页策略直接调用 `Mmap::madvise`。
+调用未检查边界的方法前，调用方必须验证范围。
 借用切片时还必须保持映射有效，并防止同一范围在借用期间被修改。
 后端返回错误的能力不能替代这些安全要求。
 
-`MappedRegion<R>` 通过 `Arc<R>` 共享后端。克隆句柄会保留同一块区域，最后一个句柄释放时
-才销毁后端。内部访问方法使用相对区域起点的偏移，而非 ELF 虚拟偏移。
+`MappedRegion::new(region, Some(mapper.into()))` 持有区域和映射后端，直到最后一个句柄释放。
+页面权限由原所有者管理时，传入 `None`。
+字节访问使用相对区域起点的偏移。映射完成后就可以释放 `Loader`。镜像在重定位完成后，
+仍能用目标虚拟地址调用这个后端的 `mprotect`，将 RELRO 页设为只读。
 
 `HostRegion` 用于访问当前进程中的内存：
 
@@ -46,13 +49,14 @@ assert_eq!(addr.get(), 0x401000);
 - `MappedRegion::local_alias` 借用映射。所有者必须保证映射仍然有效，并与所有别名协调访问和权限变更。
 - `MappedRegion::local_alias_no_unmap` 借用内存，但不附带控制映射的后端。
 
-`AllocMmap` 保存原始分配指针和 Rust `Layout`，销毁时调用 `dealloc`。
-其裸 `munmap(addr, len)` 返回错误，因为仅凭地址和长度无法确定原始分配布局。
+`AllocMmap` 按基础页对齐分配内存。镜像要求更高对齐时，多申请 `align - page_size`
+字节，在块内选择满足偏移要求的起点，只清零镜像可见范围。最后一个句柄将原始地址和
+分配总长度传给 `AllocMmap::munmap`，后端用固定的页对齐重建分配布局并释放内存。
 
 `MappedView<T>` 是内部使用的类型化借用视图。保存的 `'static` 切片不拥有映射；
 持有视图的镜像仍须维持内存生命周期并遵守借用约束。构造视图前需要检查长度和对齐。
-无法暴露宿主内存的后端可从 `borrow_bytes` 返回 `None`；调用方必须处理这种情况，
-不能假定所有解析路径都能直接借用内存。
+加载共享库需要借用 `PT_DYNAMIC`、动态符号表和字符串表。
+通过 `ElfSegments` 读取字节时，后端也须能用 `RegionAccess::borrow_bytes` 借出所请求的范围。
 
 ## 镜像地址转换
 
@@ -100,7 +104,7 @@ assert_eq!(addr.get(), 0x401000);
 
 - `Mmap` 后端的 `unsafe`：会改进程虚拟地址空间，调用错了可能破坏映射。
 - `RegionAccess` 的 `unsafe`：默认调用方已经保证 offset 和 len 在 region 内。
-- `HostRegion` 里的裸指针操作：把 offset 转成指针并读写 bytes/value。
+- `HostRegion` 使用裸指针借出切片、复制字节和清零。
 
 边界划分的原则是：
 
@@ -130,6 +134,6 @@ assert_eq!(addr.get(), 0x401000);
 
 实现 `RegionAccess` 时，重点是让这些能力符合实际情况：
 
-- 能直接借出 host bytes，就实现 `borrow_bytes`。
+- 对加载器需要读取的范围，`borrow_bytes` 应返回对应的宿主字节切片。
 - 能直接拿到 host pointer，就实现 `host_ptr`。
-- 不能直接暴露，就返回 `None`，让上层选择别的路径。
+- 无法借出的范围可返回 `None`。动态加载需要该视图时会返回错误。

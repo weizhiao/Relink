@@ -1,12 +1,12 @@
 # Relink Memory Model
 
 The [`memory` module](../../src/memory/mod.rs) provides access to mapped memory.
-The [`Mmap` trait](../../src/os/traits.rs) creates and populates mappings;
-`RegionAccess` reads, writes, borrows, and protects their contents.
+The [`Mmap` trait](../../src/os/traits.rs) creates mappings, populates them, and sets page permissions.
+`RegionAccess` provides byte access within a mapping.
 
 ```text
-Mmap                  creates and populates a mapping
-  → MappedRegion      shares ownership of a RegionAccess backend
+Mmap                  creates, populates, and protects a mapping
+  → MappedRegion      shares the region and its mapping backend
     → ElfSegments     translates image addresses and checks the mapped range
       → ImageMemory   exposes address-based access to the rest of the loader
 ```
@@ -35,15 +35,19 @@ usable as a host pointer when the backend exposes host-accessible memory.
 
 ## Regions and Ownership
 
-`RegionAccess` describes one contiguous memory region. It provides byte and typed
-reads/writes, zeroing, optional host access, and protection/advice operations.
+`RegionAccess` describes one contiguous memory region. It provides borrowed
+bytes, byte writes, zeroing, and host pointer translation.
+Relocations use `ImageMemoryExt` for typed reads and writes. The transparent
+huge page policy calls `Mmap::madvise` directly.
 Unchecked methods require the caller to validate the range. Borrowing also requires
 keeping the mapping alive and preventing mutation while the slice is in use.
 Backend errors do not replace these safety requirements.
 
-`MappedRegion<R>` shares a backend through `Arc<R>`. Cloning retains the same region;
-the backend is dropped when its last handle is dropped. Its internal access helpers
-use region-relative offsets, not ELF virtual offsets.
+`MappedRegion::new(region, Some(mapper.into()))` keeps both values alive until
+the last clone is dropped. Pass `None` when the owner manages page permissions.
+Byte access uses offsets from the start of the region. After relocation,
+the image calls the retained mapper's `mprotect` with the target virtual address to
+apply RELRO. The loader can be dropped as soon as mapping finishes.
 
 `HostRegion` implements access to memory in the current process:
 
@@ -53,15 +57,18 @@ use region-relative offsets, not ELF virtual offsets.
   alive and coordinate access and protection changes with all aliases.
 - `MappedRegion::local_alias_no_unmap` borrows memory without a mapping-control backend.
 
-`AllocMmap` retains the original allocation pointer and Rust `Layout`, then calls
-`dealloc` on drop. Its raw `munmap(addr, len)` returns an error because the address
-and length do not identify the allocation layout.
+`AllocMmap` allocates at base page alignment. To satisfy a larger image alignment,
+it reserves an extra `align - page_size` bytes and places the image at the
+requested offset modulo `align`. It clears only the visible image. The last
+handle passes the original address and total length to `AllocMmap::munmap`,
+which uses the fixed page alignment to reconstruct the allocator layout.
 
 `MappedView<T>` is an internal typed view of borrowed bytes. Its stored `'static`
 slice does not own the mapping: the enclosing image must retain the memory and
 respect the borrow. Creating a view requires suitable length and alignment.
-Backends that cannot expose host bytes return `None` from `borrow_bytes`; callers
-must handle that case rather than assume every parsing path can borrow memory.
+Loading a shared object requires borrowed views of `PT_DYNAMIC`, the dynamic
+symbol table, and the string table. Byte reads through `ElfSegments` also
+require `RegionAccess::borrow_bytes` for the requested range.
 
 ## Image Address Translation
 
@@ -112,7 +119,7 @@ The unsafe operations have separate responsibilities:
 
 - `Mmap` backend `unsafe`: changes the process virtual address space. Incorrect calls can break mappings.
 - `RegionAccess` `unsafe`: assumes the caller has already proven that offset and length are inside the region.
-- `HostRegion` raw pointer operations: turn offsets into pointers and read/write bytes or values.
+- `HostRegion` uses raw pointers to expose slices, copy bytes, and clear memory.
 
 The boundary rule is:
 
@@ -142,6 +149,6 @@ The second is implementing `RegionAccess`. This fits more specialized environmen
 
 When implementing `RegionAccess`, expose only what is actually available:
 
-- If host bytes can be borrowed directly, implement `borrow_bytes`.
+- Return the requested host slice from `borrow_bytes` for ranges the loader needs to read.
 - If a host pointer can be returned, implement `host_ptr`.
-- If direct exposure is impossible, return `None` and let upper layers choose another path.
+- Return `None` for an unavailable view. Dynamic loading fails if it needs that view.

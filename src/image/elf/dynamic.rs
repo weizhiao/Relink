@@ -42,13 +42,7 @@ impl<L: ElfLayout> SymbolTable<L> {
             .checked_offset_from(segments.base())
             .ok_or(ParseDynamicError::AddressOverflow)?;
         let symbols = segments
-            .read_tail_view::<ElfSymbol<L>>(symtab_off)
-            .ok_or_else(|| {
-                ParseDynamicError::malformed_table(
-                    crate::elf::ElfDynamicTag::SYMTAB,
-                    "table is outside mapped ELF segments or has invalid alignment",
-                )
-            })?
+            .read_tail_view::<ElfSymbol<L>>(symtab_off)?
             .as_slice();
 
         let strtab_size = dynamic
@@ -60,14 +54,7 @@ impl<L: ElfLayout> SymbolTable<L> {
             .strtab
             .checked_offset_from(segments.base())
             .ok_or(ParseDynamicError::AddressOverflow)?;
-        let strtab = segments
-            .read_view::<u8>(strtab_off, strtab_size.get())
-            .ok_or_else(|| {
-                ParseDynamicError::malformed_table(
-                    crate::elf::ElfDynamicTag::STRTAB,
-                    "string table size is malformed",
-                )
-            })?;
+        let strtab = segments.read_view::<u8>(strtab_off, strtab_size.get())?;
         let strtab = ElfStringTable::new(strtab);
 
         #[cfg(feature = "version")]
@@ -229,16 +216,8 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
     pub(crate) fn resolve_lifecycle(&self) -> Result<(Lifecycle, Lifecycle)> {
         let segments = self.module.segments();
-        let init = self.extra.init.resolve::<Arch::Layout, R>(
-            segments,
-            crate::elf::ElfDynamicTag::INIT_ARRAY,
-            "size is malformed",
-        )?;
-        let fini = self.extra.fini.resolve::<Arch::Layout, R>(
-            segments,
-            crate::elf::ElfDynamicTag::FINI_ARRAY,
-            "size is malformed",
-        )?;
+        let init = self.extra.init.resolve::<Arch::Layout, R>(segments)?;
+        let fini = self.extra.fini.resolve::<Arch::Layout, R>(segments)?;
         Ok((init, fini))
     }
 
@@ -356,8 +335,7 @@ where
         let tls = if let Some(info) = &self.tls_info {
             let image = self
                 .segments
-                .read_view::<u8>(VmOffset::new(info.vaddr), info.filesz)
-                .ok_or_else(|| ParsePhdrError::malformed("PT_TLS image is malformed"))?;
+                .read_view::<u8>(VmOffset::new(info.vaddr), info.filesz)?;
             let request = if static_tls {
                 TlsRequest::Static(None)
             } else {

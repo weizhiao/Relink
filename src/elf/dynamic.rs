@@ -494,16 +494,11 @@ where
         // Extract relocation tables
         let pltrel = parsed
             .pltrel_off
-            .map(|pltrel_off| -> Result<_> {
-                let view = segments
-                    .read_view::<ElfRelType<Arch>>(
-                        VmOffset::new(pltrel_off.get()),
-                        parsed.pltrel_size.map(|len| len.get()).unwrap_or(0),
-                    )
-                    .ok_or(RelocTableError::InvalidTableSize {
-                        tag: ElfDynamicTag::JMPREL,
-                    })?;
-                Ok(view)
+            .map(|pltrel_off| {
+                segments.read_view::<ElfRelType<Arch>>(
+                    VmOffset::new(pltrel_off.get()),
+                    parsed.pltrel_size.map(|len| len.get()).unwrap_or(0),
+                )
             })
             .transpose()?;
         let dynrel = parsed
@@ -523,19 +518,10 @@ where
                     )
                 };
                 check_entry_size(entry_tag, entry_size, expected)?;
-                let view = segments
-                    .read_view::<ElfRelType<Arch>>(
-                        VmOffset::new(rel_off.get()),
-                        parsed.rel_size.map(|len| len.get()).unwrap_or(0),
-                    )
-                    .ok_or(RelocTableError::InvalidTableSize {
-                        tag: if parsed.is_rela.unwrap_or(false) {
-                            ElfDynamicTag::RELA
-                        } else {
-                            ElfDynamicTag::REL
-                        },
-                    })?;
-                Ok(view)
+                segments.read_view::<ElfRelType<Arch>>(
+                    VmOffset::new(rel_off.get()),
+                    parsed.rel_size.map(|len| len.get()).unwrap_or(0),
+                )
             })
             .transpose()?;
         let relr = parsed
@@ -546,15 +532,10 @@ where
                     parsed.relr_entry_size,
                     size_of::<ElfRelr<Arch::Layout>>(),
                 )?;
-                let view = segments
-                    .read_view::<ElfRelr<Arch::Layout>>(
-                        VmOffset::new(relr_off.get()),
-                        parsed.relr_size.map(|len| len.get()).unwrap_or(0),
-                    )
-                    .ok_or(RelocTableError::InvalidTableSize {
-                        tag: ElfDynamicTag::RELR,
-                    })?;
-                Ok(view)
+                segments.read_view::<ElfRelr<Arch::Layout>>(
+                    VmOffset::new(relr_off.get()),
+                    parsed.relr_size.map(|len| len.get()).unwrap_or(0),
+                )
             })
             .transpose()?;
         let pltrel_is_dynrel_tail = matches!(
@@ -569,9 +550,7 @@ where
         // entries so the regular relocation pipeline can consume it.
         let packed_rela = match (parsed.android_rela_off, parsed.android_rela_size) {
             (Some(off), Some(size)) => {
-                let view = segments
-                    .read_view::<u8>(VmOffset::new(off.get()), size.get())
-                    .ok_or(RelocTableError::PackedRelaRange)?;
+                let view = segments.read_view::<u8>(VmOffset::new(off.get()), size.get())?;
                 super::rel::decode_packed_rela::<Arch::Layout, Arch::Relocation>(view.as_slice())?
             }
             _ => Vec::new(),
@@ -651,15 +630,11 @@ impl LifecycleSpec {
     pub(crate) fn resolve<L: ElfLayout, R: RegionAccess>(
         self,
         segments: &ElfSegments<R>,
-        tag: ElfDynamicTag,
-        malformed: &'static str,
     ) -> Result<Lifecycle> {
         let array = self
             .array_offset
-            .map(|offset| -> Result<_> {
-                segments
-                    .read_view::<L::Word>(VmOffset::new(offset.get()), self.array_byte_len)
-                    .ok_or_else(|| ParseDynamicError::malformed_table(tag, malformed).into())
+            .map(|offset| {
+                segments.read_view::<L::Word>(VmOffset::new(offset.get()), self.array_byte_len)
             })
             .transpose()?;
         let words = array.as_ref().map_or(&[][..], MappedView::as_slice);
