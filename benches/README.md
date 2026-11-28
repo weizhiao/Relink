@@ -158,7 +158,9 @@ measurement, 30 Clang or 10 LLVM samples, one process per backend/workload.
 Actual measurement time exceeds 5 s when needed to collect the samples.
 The figure shows mean time and Criterion's 95% confidence interval; loading,
 collapse, setup, correctness checks and teardown are excluded. Both axes start
-at zero. The figure compares default Relink with `ThpPolicy::Collapse`.
+at zero. Both panels show Relink with `ThpPolicy::Collapse`, default Relink, and
+`libloading` (the `glibc` worker). The README reports percentage reductions
+relative to `libloading`, calculated from the unrounded means.
 
 Instruction TLB counts come from separate `perf stat` runs with `--test`.
 Criterion 0.8.2 executes one test iteration; together with validation before and

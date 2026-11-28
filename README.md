@@ -56,10 +56,11 @@ for dependencies and measurement scope.
 
 **Transparent Huge Page Optimization**
 
-In these Clang / LLVM compilation workloads, enabling `ThpPolicy::Collapse`
-reduced **execution time by 2.2–4.7%** and **instruction TLB misses by about 99.95% in both workloads**.
+Compared with `libloading` (glibc), Relink with `ThpPolicy::Collapse` reduced mean execution time
+by **4.49% for Clang** (482.7 to 461.0 ms) and **2.35% for LLVM** (827.8 to 808.3 ms).
+Both workloads also recorded about **99.95% fewer instruction TLB misses**.
 
-![Relink execution time and instruction TLB misses with and without THP](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/thp-execution.svg)
+![Clang and LLVM execution time and instruction TLB misses for Relink, Relink with THP, and libloading (glibc)](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/thp-execution.svg)
 
 Execution shows means and 95% confidence intervals, excluding loading, page
 collapse, setup and validation. iTLB counts cover the whole user-mode worker,

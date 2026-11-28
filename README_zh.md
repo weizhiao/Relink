@@ -52,10 +52,10 @@ Relink 是用 Rust 编写的 ELF 加载器与运行时链接器，面向插件�
 
 **透明大页优化**
 
-在本次 Clang / LLVM 编译负载测试中，启用 `ThpPolicy::Collapse` 后，
-**执行耗时减少 2.2–4.7%**，两组的**指令 TLB miss 均减少约 99.95%**。
+与 `libloading`（glibc）相比，启用 `ThpPolicy::Collapse` 的 Relink 将 **Clang 的平均执行耗时缩短了 4.49%**（从 482.7 ms 降至 461.0 ms），**LLVM 缩短了 2.35%**（从 827.8 ms 降至 808.3 ms）。
+两项负载的指令 TLB 未命中次数也均减少约 **99.95%**。
 
-![Relink 启用 THP 前后的执行耗时和指令 TLB miss 对比](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/thp-execution.svg)
+![Clang 和 LLVM 在默认 Relink、启用 THP 的 Relink 和 libloading（glibc）下的执行耗时和指令 TLB miss](https://raw.githubusercontent.com/weizhiao/Relink/main/benches/figures/thp-execution.svg)
 
 执行耗时展示均值和 95% 置信区间，不含加载、大页合并、准备与校验。
 iTLB 为整进程用户态计数，包含这些阶段；图中为两次计数的均值，越低越好。
