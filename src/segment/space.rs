@@ -147,19 +147,10 @@ impl<R: RegionAccess> ImageMemory for ElfSegments<R> {
         self.base()
     }
 
-    fn range_at(&self, addr: VmAddr) -> Option<Range<VmAddr>> {
-        self.range.contains(&addr).then(|| self.range())
-    }
-
     fn visit_ranges(&self, visit: &mut dyn FnMut(Range<VmAddr>)) {
         if !self.range.is_empty() {
             visit(self.range());
         }
-    }
-
-    #[inline]
-    fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
-        self.host_ptr_range(addr, 1)
     }
 
     #[inline]

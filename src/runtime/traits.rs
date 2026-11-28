@@ -50,7 +50,7 @@ impl<'a, Arch: RelocationArch> CodeContext<'a, Arch> {
     #[inline]
     pub fn host_ptr(&self, addr: VmAddr) -> Result<core::ptr::NonNull<u8>> {
         self.memory
-            .host_ptr(addr)
+            .host_ptr_range(addr, 1)
             .ok_or(MmapError::HostPointerUnavailable.into())
     }
 }

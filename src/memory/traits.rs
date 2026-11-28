@@ -64,19 +64,11 @@ pub trait ImageMemory: Send + Sync {
     /// Returns the load base used by this image.
     fn base(&self) -> VmAddr;
 
-    /// Returns the address range owned by this image that contains `addr`.
+    /// Enumerates the mapped intervals owned by this image, excluding holes.
     ///
-    /// Returns the actual mapped interval containing `addr`, excluding holes.
-    /// Implementations with no mapping at `addr` return `None`.
-    fn range_at(&self, addr: VmAddr) -> Option<Range<VmAddr>>;
-
-    /// Enumerates every mapped interval, in the same precedence order as `range_at`.
     /// Empty images invoke no callbacks. Indexed mappings must remain unchanged
     /// until deregistration; changes require removing and registering the image again.
     fn visit_ranges(&self, visit: &mut dyn FnMut(Range<VmAddr>));
-
-    /// Translates an image VM address into a host-accessible pointer.
-    fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>>;
 
     /// Translates a mapped address and byte length into a host-accessible pointer.
     /// Returns `None` when the requested range is outside the host-accessible mapping.
@@ -131,7 +123,7 @@ pub trait ImageMemoryExt: ImageMemory {
     /// The caller must ensure `addr..addr + size_of::<T>()` is backed by
     /// initialized, readable and writable image memory with exclusive access.
     #[inline]
-    unsafe fn update_value<T: ByteRepr + Copy>(
+    unsafe fn update_value<T: ByteRepr>(
         &self,
         addr: VmAddr,
         update: impl FnOnce(T) -> T,
@@ -157,18 +149,8 @@ where
     }
 
     #[inline]
-    fn range_at(&self, addr: VmAddr) -> Option<Range<VmAddr>> {
-        (**self).range_at(addr)
-    }
-
-    #[inline]
     fn visit_ranges(&self, visit: &mut dyn FnMut(Range<VmAddr>)) {
         (**self).visit_ranges(visit)
-    }
-
-    #[inline]
-    fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
-        (**self).host_ptr(addr)
     }
 
     #[inline]

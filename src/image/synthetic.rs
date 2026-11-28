@@ -34,17 +34,7 @@ impl ImageMemory for UnmappedImageMemory {
         self.base
     }
 
-    #[inline]
-    fn range_at(&self, _addr: VmAddr) -> Option<core::ops::Range<VmAddr>> {
-        None
-    }
-
     fn visit_ranges(&self, _visit: &mut dyn FnMut(core::ops::Range<VmAddr>)) {}
-
-    #[inline]
-    fn host_ptr(&self, _addr: VmAddr) -> Option<NonNull<u8>> {
-        None
-    }
 
     #[inline]
     fn host_ptr_range(&self, _addr: VmAddr, _len: usize) -> Option<NonNull<u8>> {

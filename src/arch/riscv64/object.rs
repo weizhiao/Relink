@@ -36,7 +36,7 @@ enum ImmType {
     CJ,
 }
 
-trait WrappingRelocWord: Copy {
+trait WrappingRelocWord: ByteRepr {
     fn trunc_from_usize(val: usize) -> Self;
     fn wrapping_add(self, rhs: Self) -> Self;
     fn wrapping_sub(self, rhs: Self) -> Self;
@@ -454,7 +454,7 @@ impl RiscV64Arch {
         is_add: bool,
     ) -> Result<()>
     where
-        T: WrappingRelocWord + ByteRepr,
+        T: WrappingRelocWord,
         Memory: ImageMemory,
     {
         unsafe {
@@ -477,7 +477,7 @@ impl RiscV64Arch {
         place: VmAddr,
     ) -> Result<()>
     where
-        T: WrappingRelocWord + ByteRepr,
+        T: WrappingRelocWord,
         D: Send + Sync + 'static,
         R: RegionAccess,
         Tls: TlsResolver<Self>,

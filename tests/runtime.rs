@@ -25,9 +25,9 @@ fn load_plugin() -> Result<()> {
     let module = context.module(plugin.root())?;
     let score = unsafe { module.get::<extern "C" fn() -> i32>("score") }?.unwrap();
     let addr = VmAddr::from_ptr(score.into_raw());
-    let range = module.memory().range_at(addr).unwrap();
-    assert!(module.memory().host_ptr_range(range.end, 1).is_none());
     let caller = context.address_at(addr).unwrap();
+    let memory = module.memory();
+    assert!(memory.host_ptr_range(caller.range.end, 1).is_none());
     let mut target = LinkContext::for_process();
     let imported = target.import(&context, plugin.root())?;
     assert!(module.ptr_eq(target.module(imported.id())?));
